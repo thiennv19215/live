@@ -165,8 +165,9 @@ class GiftMappingCard(tk.Frame):
 
         # Video File Name Display / Entry
         self.file_var = tk.StringVar(value=video_filename)
-        lbl_file = tk.Label(self, textvariable=self.file_var, font=("Segoe UI", 8), fg=TEXT_MUTED, bg=CARD_BG, anchor="w")
-        lbl_file.grid(row=1, column=1, sticky="w")
+        disp_name = Path(video_filename).name
+        self.lbl_file = tk.Label(self, text=disp_name, font=("Segoe UI", 8), fg=TEXT_MUTED, bg=CARD_BG, anchor="w", wraplength=220, justify="left")
+        self.lbl_file.grid(row=1, column=1, sticky="w")
 
         # Priority Spinbox / Entry
         prio_frame = tk.Frame(self, bg=CARD_BG)
@@ -184,13 +185,18 @@ class GiftMappingCard(tk.Frame):
         btn_test = tk.Button(self, text="▶ Test", font=("Segoe UI", 8, "bold"), bg=COLOR_EMERALD, fg="#042f2e", activebackground="#34d399", relief="flat", padx=6, pady=3, command=lambda: self.on_test(self.gift_key))
         btn_test.grid(row=0, column=4, rowspan=2, padx=(0, 2))
 
+        for widget in (self, lbl_icon, lbl_title, self.lbl_file):
+            widget.bind("<Enter>", lambda _: self.configure(bg=CARD_HOVER, highlightbackground=COLOR_CYAN))
+            widget.bind("<Leave>", lambda _: self.configure(bg=CARD_BG, highlightbackground=PANEL_BORDER))
+
     def _choose(self) -> None:
         filename = filedialog.askopenfilename(title=f"Chọn video cho quà {self.gift_key.title()}", filetypes=[("Media Files", "*.mp4 *.mov *.mkv *.webm *.png *.jpg *.jpeg *.webp"), ("All files", "*.*")])
         if filename:
             path = Path(filename)
             core.VIDEO_DIRECTORY = path.parent
             mapped_val = path.name if path.parent == core.VIDEO_DIRECTORY else str(path)
-            self.file_var.set(path.name)
+            self.file_var.set(mapped_val)
+            self.lbl_file.configure(text=path.name)
             self.on_choose_file(self.gift_key, mapped_val, self.get_priority())
 
     def get_priority(self) -> int:
@@ -232,6 +238,9 @@ class StreamDeckButton(tk.Frame):
         self.lbl_title = lbl_title
         self.lbl_sub = lbl_sub
 
+    def set_subtitle(self, subtitle: str) -> None:
+        self.lbl_sub.configure(text=subtitle)
+
     def on_enter(self, _: tk.Event) -> None:
         self.configure(bg=self.bg_hover, highlightbackground=COLOR_CYAN)
         self.lbl_title.configure(bg=self.bg_hover)
@@ -260,6 +269,7 @@ class TikTokObsGui:
         self.recent_history: list[core.GiftJob] = []
         self._last_completed_job: core.GiftJob | None = None
         self.gift_cards: dict[str, GiftMappingCard] = {}
+        self.deck_buttons: dict[str, StreamDeckButton] = {}
 
         self.username = tk.StringVar(value=core.TIKTOK_USERNAME)
         self.obs_host = tk.StringVar(value=core.OBS_HOST)
@@ -535,16 +545,24 @@ class TikTokObsGui:
         deck_grid.pack(fill="x")
 
         buttons_data = [
-            ("🌹", "Rose (Hoa Hồng)", "Priority: 1 | cho_1_sui.mp4", COLOR_ROSE, "rose"),
-            ("🍩", "Doughnut (Bánh)", "Priority: 2 | cho_2_trong_chuoi.mp4", COLOR_AMBER, "doughnut"),
-            ("♪", "TikTok", "Priority: 3 | 3_cho_nhay_tiktok.mp4", COLOR_CYAN, "tiktok"),
-            ("🦁", "Lion (Sư Tử - Ngắt)", "Priority: 5 | 3_cho_bien_su_tu.mp4", COLOR_PURPLE, "lion"),
+            ("🌹", "Rose (Hoa Hồng)", COLOR_ROSE, "rose"),
+            ("🍩", "Doughnut (Bánh)", COLOR_AMBER, "doughnut"),
+            ("♪", "TikTok", COLOR_CYAN, "tiktok"),
+            ("🦁", "Lion (Sư Tử - Ngắt)", COLOR_PURPLE, "lion"),
         ]
 
-        for col, (emoji, title, sub, color, gift_key) in enumerate(buttons_data):
+        for col, (emoji, title, color, gift_key) in enumerate(buttons_data):
+            mapped = core.GIFT_MAPPING.get(gift_key)
+            if mapped:
+                fn, prio = mapped
+                sub = f"Priority: {prio} | {Path(fn).name}"
+            else:
+                sub = "Priority: --"
+
             btn = StreamDeckButton(deck_grid, emoji, title, sub, color, command=lambda g=gift_key: self.test_gift(g))
             btn.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 4, 4 if col < 3 else 0))
             deck_grid.columnconfigure(col, weight=1)
+            self.deck_buttons[gift_key] = btn
 
         return panel
 
@@ -617,7 +635,10 @@ class TikTokObsGui:
 
     def update_card_mapping(self, gift_key: str, filename: str, priority: int) -> None:
         core.GIFT_MAPPING[gift_key] = (filename, priority)
-        logging.getLogger(__name__).info("Đã cập nhật video cho quà %s: %s (Priority %s)", gift_key.title(), filename, priority)
+        fn_name = Path(filename).name
+        if gift_key in self.deck_buttons:
+            self.deck_buttons[gift_key].set_subtitle(f"Priority: {priority} | {fn_name}")
+        logging.getLogger(__name__).info("Đã cập nhật video cho quà %s: %s (Priority %s)", gift_key.title(), fn_name, priority)
 
     def _build_log_console(self, parent: ttk.Frame) -> ttk.Frame:
         panel = ttk.Frame(parent, style="Panel.TFrame", padding=8)
@@ -781,6 +802,9 @@ class TikTokObsGui:
             filename = card.file_var.get().strip()
             prio = card.get_priority()
             core.GIFT_MAPPING[gift] = (filename, prio)
+            fn_name = Path(filename).name
+            if gift in self.deck_buttons:
+                self.deck_buttons[gift].set_subtitle(f"Priority: {prio} | {fn_name}")
         logging.getLogger(__name__).info("Đã cập nhật toàn bộ Gift Mapping Cards Matrix")
 
     def open_video_folder(self) -> None:
