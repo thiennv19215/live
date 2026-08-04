@@ -54,13 +54,39 @@ OBS_RECONNECT_DELAY = 3.0
 
 IDLE_VIDEO_PATH = VIDEO_DIRECTORY / "idle_loop.mp4"
 
-GIFT_MAPPING: dict[str, tuple[str, int]] = {
+import json
+
+CONFIG_FILE = APP_DIRECTORY / "gift_config.json"
+
+DEFAULT_GIFT_MAPPING: dict[str, tuple[str, int]] = {
     "rose": ("cho_1_sui.png", 1),
     "doughnut": ("cho_2_trong_chuoi.png", 2),
     "perfume": ("cho_2_trong_chuoi.png", 2),
     "tiktok": ("3_cho_nhay_tiktok.mp4", 3),
     "lion": ("3_cho_bien_su_tu.mp4", 5),
 }
+
+
+def load_gift_mapping() -> dict[str, tuple[str, int]]:
+    if CONFIG_FILE.is_file():
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return {str(k).lower().strip(): (str(v[0]), int(v[1])) for k, v in data.items()}
+        except Exception:
+            pass
+    return DEFAULT_GIFT_MAPPING.copy()
+
+
+def save_gift_mapping(mapping: dict[str, tuple[str, int]]) -> None:
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(mapping, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+GIFT_MAPPING = load_gift_mapping()
 
 logging.basicConfig(
     level=logging.INFO,
