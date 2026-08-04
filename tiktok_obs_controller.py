@@ -52,9 +52,47 @@ ACTION_DEFAULT_DURATION = 10.0
 TIKTOK_RECONNECT_DELAY = 5.0
 OBS_RECONNECT_DELAY = 3.0
 
-IDLE_VIDEO_PATH = VIDEO_DIRECTORY / "idle_loop.mp4"
-
 import json
+
+OBS_CONFIG_FILE = APP_DIRECTORY / "obs_config.json"
+
+
+def load_obs_config() -> dict[str, Any]:
+    default_cfg = {
+        "tiktok_username": "your_tiktok_username",
+        "obs_host": "127.0.0.1",
+        "obs_port": 4455,
+        "obs_password": "your_obs_websocket_password",
+        "scene_name": "Main Scene",
+        "idle_source_name": "Idle_Source",
+        "action_source_name": "Action_Source",
+    }
+    if OBS_CONFIG_FILE.is_file():
+        try:
+            with open(OBS_CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                default_cfg.update(data)
+        except Exception:
+            pass
+    return default_cfg
+
+
+def save_obs_config(config: dict[str, Any]) -> None:
+    try:
+        with open(OBS_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+_saved_obs_cfg = load_obs_config()
+TIKTOK_USERNAME = str(_saved_obs_cfg.get("tiktok_username", TIKTOK_USERNAME))
+OBS_HOST = str(_saved_obs_cfg.get("obs_host", OBS_HOST))
+OBS_PORT = int(_saved_obs_cfg.get("obs_port", OBS_PORT))
+OBS_PASSWORD = str(_saved_obs_cfg.get("obs_password", OBS_PASSWORD))
+SCENE_NAME = str(_saved_obs_cfg.get("scene_name", SCENE_NAME))
+IDLE_SOURCE_NAME = str(_saved_obs_cfg.get("idle_source_name", IDLE_SOURCE_NAME))
+ACTION_SOURCE_NAME = str(_saved_obs_cfg.get("action_source_name", ACTION_SOURCE_NAME))
 
 CONFIG_FILE = APP_DIRECTORY / "gift_config.json"
 

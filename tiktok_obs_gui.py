@@ -32,6 +32,19 @@ COLOR_PURPLE = "#a855f7"
 COLOR_BLUE = "#3b82f6"
 
 
+def shorten_filename(filename: str, max_chars: int = 24) -> str:
+    name = Path(filename).name
+    if len(name) <= max_chars:
+        return name
+    ext = Path(name).suffix
+    stem = Path(name).stem
+    avail = max_chars - len(ext) - 3
+    if avail < 4:
+        return name[: max_chars - 3] + "..."
+    half = avail // 2
+    return f"{stem[:half]}...{stem[-(avail - half):]}{ext}"
+
+
 class ColorLogHandler(logging.Handler):
     """Handler đệm log và hỗ trợ phân loại màu trong console GUI."""
 
@@ -165,8 +178,8 @@ class GiftMappingCard(tk.Frame):
 
         # Video File Name Display / Entry
         self.file_var = tk.StringVar(value=video_filename)
-        disp_name = Path(video_filename).name
-        self.lbl_file = tk.Label(self, text=disp_name, font=("Segoe UI", 8), fg=TEXT_MUTED, bg=CARD_BG, anchor="w", wraplength=220, justify="left")
+        disp_name = shorten_filename(video_filename, 22)
+        self.lbl_file = tk.Label(self, text=disp_name, font=("Segoe UI", 8), fg=TEXT_MUTED, bg=CARD_BG, anchor="w")
         self.lbl_file.grid(row=1, column=1, sticky="w")
 
         # Priority Spinbox / Entry
@@ -204,7 +217,7 @@ class GiftMappingCard(tk.Frame):
             core.VIDEO_DIRECTORY = path.parent
             mapped_val = path.name if path.parent == core.VIDEO_DIRECTORY else str(path)
             self.file_var.set(mapped_val)
-            self.lbl_file.configure(text=path.name)
+            self.lbl_file.configure(text=shorten_filename(path.name, 22))
             self.on_choose_file(self.gift_key, mapped_val, self.get_priority())
 
     def get_priority(self) -> int:
@@ -286,7 +299,7 @@ class TikTokObsGui:
         self.scene_name = tk.StringVar(value=core.SCENE_NAME)
         self.idle_source = tk.StringVar(value=core.IDLE_SOURCE_NAME)
         self.action_source = tk.StringVar(value=core.ACTION_SOURCE_NAME)
-        self.idle_video_name = tk.StringVar(value=core.resolve_existing_media_path(core.IDLE_VIDEO_PATH).name)
+        self.idle_video_name = tk.StringVar(value=shorten_filename(core.resolve_existing_media_path(core.IDLE_VIDEO_PATH).name, 22))
 
         # Mặc định False để kết nối OBS thật khi bấm nút
         self.mock_mode_var = tk.BooleanVar(value=False)
@@ -441,6 +454,12 @@ class TikTokObsGui:
         ttk.Checkbutton(chk_frame, text="🧪 Bật Giả Lập (Mock Mode)", variable=self.mock_mode_var).pack(anchor="w")
         ttk.Checkbutton(chk_frame, text="📡 Kết Nối TikTok Live (Realtime)", variable=self.enable_tiktok_var).pack(anchor="w", pady=(2, 0))
 
+        # TikTok Username Input
+        u_box = tk.Frame(panel, bg=PANEL_BG)
+        u_box.pack(fill="x", pady=(0, 8))
+        ttk.Label(u_box, text="TikTok Username (Host Live):", style="PanelMuted.TLabel").pack(anchor="w", pady=(0, 2))
+        ttk.Entry(u_box, textvariable=self.username).pack(fill="x")
+
         # IDLE VIDEO SELECTION CARD
         idle_box = tk.Frame(panel, bg=CARD_BG, highlightbackground=COLOR_CYAN, highlightthickness=1, padx=8, pady=5)
         idle_box.pack(fill="x", pady=(0, 8))
@@ -454,36 +473,85 @@ class TikTokObsGui:
         btn_pick_idle = tk.Button(idle_row, text="📂 Chọn", font=("Segoe UI", 8, "bold"), bg=COLOR_AMBER, fg="#000", relief="flat", padx=5, pady=2, command=self.choose_idle_video)
         btn_pick_idle.pack(side="right", padx=(4, 0))
 
-        # Compact Config Grid (2 Columns)
-        cfg_grid = tk.Frame(panel, bg=PANEL_BG)
-        cfg_grid.pack(fill="x", pady=(2, 0))
-        cfg_grid.columnconfigure(0, weight=1)
-        cfg_grid.columnconfigure(1, weight=1)
+        # Dedicated OBS Settings & Open Folder Buttons
+        btn_obs_cfg = tk.Button(panel, text="⚙ Cài Đặt Kết Nối OBS Studio", font=("Segoe UI", 9, "bold"), bg="#1e293b", fg=COLOR_CYAN, activebackground=COLOR_CYAN, activeforeground="#000", relief="flat", padx=6, pady=5, command=self.open_obs_settings_dialog)
+        btn_obs_cfg.pack(fill="x", pady=(4, 4))
 
-        # TikTok Username (Span 2)
-        ttk.Label(cfg_grid, text="TikTok Username", style="PanelMuted.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
-        ttk.Entry(cfg_grid, textvariable=self.username).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 4))
-
-        # OBS Host & Port (Col 0, Col 1)
-        ttk.Label(cfg_grid, text="OBS Host", style="PanelMuted.TLabel").grid(row=2, column=0, sticky="w")
-        ttk.Label(cfg_grid, text="OBS Port", style="PanelMuted.TLabel").grid(row=2, column=1, sticky="w", padx=(4, 0))
-        ttk.Entry(cfg_grid, textvariable=self.obs_host).grid(row=3, column=0, sticky="ew", pady=(0, 4))
-        ttk.Entry(cfg_grid, textvariable=self.obs_port).grid(row=3, column=1, sticky="ew", padx=(4, 0), pady=(0, 4))
-
-        # OBS Password & Scene Name (Col 0, Col 1)
-        ttk.Label(cfg_grid, text="OBS Password", style="PanelMuted.TLabel").grid(row=4, column=0, sticky="w")
-        ttk.Label(cfg_grid, text="Scene Name", style="PanelMuted.TLabel").grid(row=4, column=1, sticky="w", padx=(4, 0))
-        ttk.Entry(cfg_grid, textvariable=self.obs_password, show="*").grid(row=5, column=0, sticky="ew", pady=(0, 4))
-        ttk.Entry(cfg_grid, textvariable=self.scene_name).grid(row=5, column=1, sticky="ew", padx=(4, 0), pady=(0, 4))
-
-        # Idle & Action Sources (Col 0, Col 1)
-        ttk.Label(cfg_grid, text="Idle Source", style="PanelMuted.TLabel").grid(row=6, column=0, sticky="w")
-        ttk.Label(cfg_grid, text="Action Source", style="PanelMuted.TLabel").grid(row=6, column=1, sticky="w", padx=(4, 0))
-        ttk.Entry(cfg_grid, textvariable=self.idle_source).grid(row=7, column=0, sticky="ew")
-        ttk.Entry(cfg_grid, textvariable=self.action_source).grid(row=7, column=1, sticky="ew", padx=(4, 0))
-
-        ttk.Button(panel, text="📁 Mở Thư Mục Videos", style="Soft.TButton", command=self.open_video_folder).pack(fill="x", pady=(8, 0))
+        ttk.Button(panel, text="📁 Mở Thư Mục Videos", style="Soft.TButton", command=self.open_video_folder).pack(fill="x")
         return panel
+
+    def open_obs_settings_dialog(self) -> None:
+        dlg = tk.Toplevel(self.root)
+        dlg.title("⚙ Cấu Hình Kết Nối OBS Studio & Scene")
+        dlg.geometry("480x350")
+        dlg.resizable(False, False)
+        dlg.configure(bg="#0f172a")
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        tk.Label(dlg, text="⚙ CẤU HÌNH OBS STUDIO WEBSOCKET V5", font=("Segoe UI", 11, "bold"), fg=COLOR_CYAN, bg="#0f172a").pack(anchor="w", padx=16, pady=(14, 10))
+
+        form = tk.Frame(dlg, bg="#0f172a", padx=16)
+        form.pack(fill="x")
+        form.columnconfigure(0, weight=1)
+        form.columnconfigure(1, weight=1)
+
+        # Host & Port
+        tk.Label(form, text="OBS Host:", font=("Segoe UI", 9), fg=TEXT_MUTED, bg="#0f172a").grid(row=0, column=0, sticky="w")
+        tk.Label(form, text="OBS Port:", font=("Segoe UI", 9), fg=TEXT_MUTED, bg="#0f172a").grid(row=0, column=1, sticky="w", padx=(6, 0))
+        e_host = tk.Entry(form, bg="#182335", fg="#fff", insertbackground="#fff", font=("Segoe UI", 10), relief="flat")
+        e_host.insert(0, self.obs_host.get())
+        e_host.grid(row=1, column=0, sticky="ew", pady=(2, 6))
+
+        e_port = tk.Entry(form, bg="#182335", fg="#fff", insertbackground="#fff", font=("Segoe UI", 10), relief="flat")
+        e_port.insert(0, self.obs_port.get())
+        e_port.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=(2, 6))
+
+        # Password & Scene Name
+        tk.Label(form, text="OBS Mật khẩu (Password):", font=("Segoe UI", 9), fg=TEXT_MUTED, bg="#0f172a").grid(row=2, column=0, sticky="w")
+        tk.Label(form, text="Tên Scene (Scene Name):", font=("Segoe UI", 9), fg=TEXT_MUTED, bg="#0f172a").grid(row=2, column=1, sticky="w", padx=(6, 0))
+        e_pass = tk.Entry(form, bg="#182335", fg="#fff", insertbackground="#fff", font=("Segoe UI", 10), show="*", relief="flat")
+        e_pass.insert(0, self.obs_password.get())
+        e_pass.grid(row=3, column=0, sticky="ew", pady=(2, 6))
+
+        e_scene = tk.Entry(form, bg="#182335", fg="#fff", insertbackground="#fff", font=("Segoe UI", 10), relief="flat")
+        e_scene.insert(0, self.scene_name.get())
+        e_scene.grid(row=3, column=1, sticky="ew", padx=(6, 0), pady=(2, 6))
+
+        # Idle & Action Sources
+        tk.Label(form, text="Nguồn Video Chờ (Idle Source):", font=("Segoe UI", 9), fg=TEXT_MUTED, bg="#0f172a").grid(row=4, column=0, sticky="w")
+        tk.Label(form, text="Nguồn Hiệu Ứng (Action Source):", font=("Segoe UI", 9), fg=TEXT_MUTED, bg="#0f172a").grid(row=4, column=1, sticky="w", padx=(6, 0))
+        e_idle = tk.Entry(form, bg="#182335", fg="#fff", insertbackground="#fff", font=("Segoe UI", 10), relief="flat")
+        e_idle.insert(0, self.idle_source.get())
+        e_idle.grid(row=5, column=0, sticky="ew", pady=(2, 6))
+
+        e_action = tk.Entry(form, bg="#182335", fg="#fff", insertbackground="#fff", font=("Segoe UI", 10), relief="flat")
+        e_action.insert(0, self.action_source.get())
+        e_action.grid(row=5, column=1, sticky="ew", padx=(6, 0), pady=(2, 6))
+
+        btn_box = tk.Frame(dlg, bg="#0f172a", padx=16, pady=16)
+        btn_box.pack(fill="x", side="bottom")
+
+        def _save_obs() -> None:
+            try:
+                p = int(e_port.get().strip())
+            except ValueError:
+                messagebox.showerror("Lỗi", "OBS Port phải là dạng số.", parent=dlg)
+                return
+
+            self.obs_host.set(e_host.get().strip())
+            self.obs_port.set(str(p))
+            self.obs_password.set(e_pass.get())
+            self.scene_name.set(e_scene.get().strip())
+            self.idle_source.set(e_idle.get().strip())
+            self.action_source.set(e_action.get().strip())
+
+            self._apply_config()
+            messagebox.showinfo("Thành công", "Đã lưu cài đặt kết nối OBS Studio!", parent=dlg)
+            dlg.destroy()
+
+        tk.Button(btn_box, text="✔ LƯU CẤU HÌNH OBS", font=("Segoe UI", 10, "bold"), bg=COLOR_EMERALD, fg="#042f2e", relief="flat", padx=12, pady=6, command=_save_obs).pack(side="right")
+        tk.Button(btn_box, text="Hủy", font=("Segoe UI", 9), bg="#334155", fg="#fff", relief="flat", padx=10, pady=6, command=dlg.destroy).pack(side="right", padx=(0, 6))
 
     def choose_idle_video(self) -> None:
         filename = filedialog.askopenfilename(title="Chọn Video Chờ (Idle Loop Video)", filetypes=[("Media Files", "*.mp4 *.mov *.mkv *.webm *.png *.jpg *.jpeg *.webp"), ("All files", "*.*")])
@@ -491,7 +559,7 @@ class TikTokObsGui:
             path = Path(filename)
             core.IDLE_VIDEO_PATH = path
             core.VIDEO_DIRECTORY = path.parent
-            self.idle_video_name.set(path.name)
+            self.idle_video_name.set(shorten_filename(path.name, 22))
             logging.getLogger(__name__).info("Đã chọn Video Chờ mới: %s", path.name)
             if self.app and self.run_loop:
                 asyncio.run_coroutine_threadsafe(self.app.obs.set_idle_video(path), self.run_loop)
@@ -773,7 +841,7 @@ class TikTokObsGui:
             mapped = core.GIFT_MAPPING.get(gift_key)
             if mapped:
                 fn, prio = mapped
-                sub = f"Priority: {prio} | {Path(fn).name}"
+                sub = f"Priority: {prio} | {shorten_filename(fn, 18)}"
             else:
                 sub = "Priority: --"
 
@@ -787,7 +855,7 @@ class TikTokObsGui:
         core.save_gift_mapping(core.GIFT_MAPPING)
         fn_name = Path(filename).name
         if gift_key in self.deck_buttons:
-            self.deck_buttons[gift_key].set_subtitle(f"Priority: {priority} | {fn_name}")
+            self.deck_buttons[gift_key].set_subtitle(f"Priority: {priority} | {shorten_filename(fn_name, 18)}")
         logging.getLogger(__name__).info("Đã cập nhật video cho quà %s: %s (Priority %s)", gift_key.title(), fn_name, priority)
 
     def _build_log_console(self, parent: ttk.Frame) -> ttk.Frame:
