@@ -48,6 +48,7 @@ IDLE_SOURCE_NAME = "Idle_Source"
 ACTION_SOURCE_NAME = "Action_Source"
 APP_DIRECTORY = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 VIDEO_DIRECTORY = APP_DIRECTORY / "videos"
+IDLE_VIDEO_PATH = VIDEO_DIRECTORY / "idle_loop.mp4"
 ACTION_DEFAULT_DURATION = 10.0
 TIKTOK_RECONNECT_DELAY = 5.0
 OBS_RECONNECT_DELAY = 3.0
