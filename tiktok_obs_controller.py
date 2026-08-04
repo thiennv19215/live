@@ -291,65 +291,72 @@ class ObsController:
                     await asyncio.sleep(OBS_RECONNECT_DELAY)
         raise ConnectionError(f"Khong the gui request OBS: {method_name}")
 
+    async def _get_scene_item_id(self, source_name: str) -> int | None:
+        if self.mock_mode:
+            return 1
+        try:
+            resp = await self._request("get_scene_item_id", scene_name=SCENE_NAME, source_name=source_name)
+            return getattr(resp, "scene_item_id", None)
+        except Exception as exc:
+            LOGGER.warning("Khong the lay SceneItemId cho '%s' trong Scene '%s': %s", source_name, SCENE_NAME, exc)
+            return None
+
     async def _set_action_visible(self, visible: bool) -> None:
         if self.mock_mode:
             LOGGER.info("[MOCK OBS] Set action visible = %s, idle visible = %s", visible, not visible)
             return
 
-        if self._client is not None:
-            if self._action_scene_item_id is None:
-                with contextlib.suppress(Exception):
-                    resp = await asyncio.to_thread(self._client.get_scene_item_id, SCENE_NAME, ACTION_SOURCE_NAME)
-                    self._action_scene_item_id = resp.scene_item_id
-            if self._idle_scene_item_id is None:
-                with contextlib.suppress(Exception):
-                    resp = await asyncio.to_thread(self._client.get_scene_item_id, SCENE_NAME, IDLE_SOURCE_NAME)
-                    self._idle_scene_item_id = resp.scene_item_id
+        action_item_id = await self._get_scene_item_id(ACTION_SOURCE_NAME)
+        idle_item_id = await self._get_scene_item_id(IDLE_SOURCE_NAME)
 
         if visible:
             # Bat Action, An Idle
-            if self._action_scene_item_id is not None:
+            if action_item_id is not None:
                 await self._request(
                     "set_scene_item_enabled",
                     scene_name=SCENE_NAME,
-                    item_id=self._action_scene_item_id,
+                    item_id=action_item_id,
                     enabled=True,
                 )
-            if self._idle_scene_item_id is not None:
+            if idle_item_id is not None:
                 await self._request(
                     "set_scene_item_enabled",
                     scene_name=SCENE_NAME,
-                    item_id=self._idle_scene_item_id,
+                    item_id=idle_item_id,
                     enabled=False,
                 )
             with contextlib.suppress(Exception):
                 await self._request("trigger_media_input_action", name=ACTION_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
         else:
             # An Action, Bat Idle
-            if self._action_scene_item_id is not None:
+            if action_item_id is not None:
                 await self._request(
                     "set_scene_item_enabled",
                     scene_name=SCENE_NAME,
-                    item_id=self._action_scene_item_id,
+                    item_id=action_item_id,
                     enabled=False,
                 )
-            if self._idle_scene_item_id is not None:
+
+            # Dung Action Source media input de khong phat ngam
+            with contextlib.suppress(Exception):
+                await self._request("trigger_media_input_action", name=ACTION_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
+
+            if idle_item_id is not None:
                 await self._request(
                     "set_scene_item_enabled",
                     scene_name=SCENE_NAME,
-                    item_id=self._idle_scene_item_id,
+                    item_id=idle_item_id,
                     enabled=True,
                 )
             with contextlib.suppress(Exception):
                 await self._request("trigger_media_input_action", name=IDLE_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
 
         # Studio Mode
-        if self._client is not None:
-            with contextlib.suppress(Exception):
-                sm_resp = await asyncio.to_thread(self._client.get_studio_mode_enabled)
-                if getattr(sm_resp, "studio_mode_enabled", False):
-                    await asyncio.to_thread(self._client.trigger_studio_mode_transition)
-                    LOGGER.info("[OBS Studio Mode] Tu dong Transition tu Preview sang Program")
+        with contextlib.suppress(Exception):
+            sm_resp = await self._request("get_studio_mode_enabled")
+            if getattr(sm_resp, "studio_mode_enabled", False):
+                await self._request("trigger_studio_mode_transition")
+                LOGGER.info("[OBS Studio Mode] Tu dong Transition tu Preview sang Program")
 
     async def play_action(self, video_path: Path) -> None:
         video_path = resolve_existing_media_path(video_path)
