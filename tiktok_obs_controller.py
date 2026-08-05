@@ -614,14 +614,15 @@ class ObsController:
                         item_id=action_item_id,
                         enabled=True,
                     )
-                # Giu Nguon Idle luon hien o lop nen phia duoi
-                if idle_item_id is not None:
-                    await self._request(
-                        "set_scene_item_enabled",
-                        scene_name=SCENE_NAME,
-                        item_id=idle_item_id,
-                        enabled=True,
-                    )
+                # Ẩn Video Nền Idle khi đang phát Action Video
+                idle_candidates = [target_idle_source, idle_name, IDLE_SOURCE_NAME] + [f"Idle_Source_{i}" for i in range(1, 5)]
+                for isrc in idle_candidates:
+                    iid = await self._get_scene_item_id(isrc)
+                    if iid is not None:
+                        with contextlib.suppress(Exception):
+                            await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=iid, enabled=False)
+                            await self._request("trigger_media_input_action", name=isrc, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE")
+
                 with contextlib.suppress(Exception):
                     await self._request("trigger_media_input_action", name=target_action_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
             else:
@@ -635,6 +636,7 @@ class ObsController:
                 with contextlib.suppress(Exception):
                     await self._request("trigger_media_input_action", name=target_action_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
 
+                # Hiện lại Video Nền Idle khi Action kết thúc
                 if idle_item_id is not None:
                     await self._request(
                         "set_scene_item_enabled",
@@ -642,6 +644,8 @@ class ObsController:
                         item_id=idle_item_id,
                         enabled=True,
                     )
+                    with contextlib.suppress(Exception):
+                        await self._request("trigger_media_input_action", name=target_idle_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
 
         # Studio Mode
         with contextlib.suppress(Exception):
