@@ -209,6 +209,20 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
             (core.IDLE_SOURCE_NAME, core.ACTION_SOURCE_NAME),
         )
 
+    async def test_all_target_with_no_complete_pair_uses_legacy_action(self) -> None:
+        """A stale Action_Source_All must not receive media when the legacy action is displayed."""
+        obs = core.ObsController(mock_mode=False)
+        obs._scene_items_cache = {
+            core.IDLE_SOURCE_NAME: 1,
+            core.ACTION_SOURCE_NAME: 2,
+            "Idle_Source_1": 3,
+            "Action_Source_All": 4,
+        }
+        self.assertEqual(
+            obs._get_sources_for_target("all"),
+            (core.IDLE_SOURCE_NAME, core.ACTION_SOURCE_NAME),
+        )
+
     async def test_idle_video_configuration(self) -> None:
         """Kiểm tra cấu hình Video Chờ (Idle Loop Video)."""
         test_path = Path("custom_idle_video.mp4")
@@ -483,6 +497,170 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn((22, True), visibility_calls)
         self.assertIn("set_scene_item_index", requested_methods)
         self.assertNotIn("trigger_studio_mode_transition", requested_methods)
+
+    async def test_reset_uses_numbered_videos_without_legacy_overlay(self) -> None:
+        """Layered mode disables the shared idle source so Video 1 stays visible."""
+        obs = core.ObsController(mock_mode=False)
+        obs._client = object()
+        obs.is_connected = True
+        obs._scene_items_cache = {
+            core.IDLE_SOURCE_NAME: 1,
+            core.ACTION_SOURCE_NAME: 2,
+            "Idle_Source_1": 11,
+            "Action_Source_1": 12,
+            "Idle_Source_2": 21,
+            "Action_Source_2": 22,
+        }
+
+        async def refresh() -> dict[str, int]:
+            return obs._scene_items_cache or {}
+
+        with (
+            patch.object(obs, "_refresh_scene_items_cache", side_effect=refresh),
+            patch.object(obs, "_request", new=AsyncMock()) as request,
+        ):
+            await obs.reset_obs_display_state()
+
+        visibility_calls = [
+            (call.kwargs.get("item_id"), call.kwargs.get("enabled"))
+            for call in request.await_args_list
+            if call.args and call.args[0] == "set_scene_item_enabled"
+        ]
+        self.assertIn((1, False), visibility_calls)
+        self.assertIn((11, True), visibility_calls)
+        self.assertIn((21, True), visibility_calls)
+
+    async def test_starting_numbered_video_disables_stale_legacy_idle(self) -> None:
+        """A Video 1 donation cannot be covered by the old shared source."""
+        obs = core.ObsController(mock_mode=False)
+        obs._client = object()
+        obs.is_connected = True
+        obs.existing_inputs = [
+            core.IDLE_SOURCE_NAME,
+            core.ACTION_SOURCE_NAME,
+            "Idle_Source_1",
+            "Action_Source_1",
+        ]
+        obs._scene_items_cache = {
+            core.IDLE_SOURCE_NAME: 1,
+            core.ACTION_SOURCE_NAME: 2,
+            "Idle_Source_1": 11,
+            "Action_Source_1": 12,
+        }
+        obs._scene_item_indices = {
+            core.IDLE_SOURCE_NAME: 0,
+            "Idle_Source_1": 1,
+            "Action_Source_1": 2,
+        }
+        obs._scene_item_count = 3
+
+        with (
+            patch.object(obs, "_request", new=AsyncMock()) as request,
+            patch.object(core.asyncio, "sleep", new=AsyncMock()),
+        ):
+            await obs._set_action_visible(True, "char1")
+
+        visibility_calls = [
+            (call.kwargs.get("item_id"), call.kwargs.get("enabled"))
+            for call in request.await_args_list
+            if call.args and call.args[0] == "set_scene_item_enabled"
+        ]
+        self.assertIn((1, False), visibility_calls)
+        self.assertIn((11, False), visibility_calls)
+        self.assertIn((12, True), visibility_calls)
+        restart_calls = [
+            call
+            for call in request.await_args_list
+            if call.args
+            and call.args[0] == "trigger_media_input_action"
+            and call.kwargs.get("name") == "Action_Source_1"
+            and call.kwargs.get("action") == "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"
+        ]
+        self.assertEqual(len(restart_calls), 1)
+
+    async def test_legacy_fallback_restores_numbered_layers_without_shared_idle(self) -> None:
+        """An incomplete target can use the shared action without corrupting layered idle state."""
+        obs = core.ObsController(mock_mode=False)
+        obs._client = object()
+        obs.is_connected = True
+        obs.existing_inputs = [
+            core.IDLE_SOURCE_NAME,
+            core.ACTION_SOURCE_NAME,
+            "Idle_Source_1",
+            "Action_Source_1",
+            "Idle_Source_2",
+        ]
+        obs._scene_items_cache = {
+            core.IDLE_SOURCE_NAME: 1,
+            core.ACTION_SOURCE_NAME: 2,
+            "Idle_Source_1": 11,
+            "Action_Source_1": 12,
+            "Idle_Source_2": 21,
+        }
+        obs._scene_item_indices = {
+            core.IDLE_SOURCE_NAME: 0,
+            "Idle_Source_1": 1,
+            "Action_Source_1": 2,
+            "Idle_Source_2": 3,
+            core.ACTION_SOURCE_NAME: 4,
+        }
+        obs._scene_item_count = 5
+
+        with (
+            patch.object(obs, "_request", new=AsyncMock()) as request,
+            patch.object(core.asyncio, "sleep", new=AsyncMock()),
+        ):
+            await obs._set_action_visible(True, "char2")
+            await obs._set_action_visible(False, "char2")
+
+        visibility_calls = [
+            (call.kwargs.get("item_id"), call.kwargs.get("enabled"))
+            for call in request.await_args_list
+            if call.args and call.args[0] == "set_scene_item_enabled"
+        ]
+        self.assertIn((1, False), visibility_calls)
+        self.assertNotIn((1, True), visibility_calls)
+        self.assertIn((11, False), visibility_calls)
+        self.assertIn((11, True), visibility_calls)
+        self.assertNotIn((21, True), visibility_calls)
+
+    async def test_all_target_ignores_incomplete_numbered_idle_sources(self) -> None:
+        """The all action only hides and restores complete character layers."""
+        obs = core.ObsController(mock_mode=False)
+        obs._client = object()
+        obs.is_connected = True
+        obs._scene_items_cache = {
+            core.IDLE_SOURCE_NAME: 1,
+            "Idle_Source_1": 11,
+            "Action_Source_1": 12,
+            "Idle_Source_2": 21,
+            "Action_Source_All": 30,
+        }
+        obs._scene_item_indices = {
+            core.IDLE_SOURCE_NAME: 0,
+            "Idle_Source_1": 1,
+            "Action_Source_1": 2,
+            "Idle_Source_2": 3,
+            "Action_Source_All": 4,
+        }
+        obs._scene_item_count = 5
+
+        with (
+            patch.object(obs, "_request", new=AsyncMock()) as request,
+            patch.object(core.asyncio, "sleep", new=AsyncMock()),
+        ):
+            await obs._set_action_visible(True, "all")
+            await obs._set_action_visible(False, "all")
+
+        visibility_calls = [
+            (call.kwargs.get("item_id"), call.kwargs.get("enabled"))
+            for call in request.await_args_list
+            if call.args and call.args[0] == "set_scene_item_enabled"
+        ]
+        self.assertIn((11, False), visibility_calls)
+        self.assertIn((11, True), visibility_calls)
+        self.assertNotIn((21, False), visibility_calls)
+        self.assertNotIn((21, True), visibility_calls)
 
     async def test_missing_obs_source_fails_instead_of_using_first_input(self) -> None:
         obs = core.ObsController(mock_mode=False)

@@ -551,14 +551,18 @@ class ObsController:
             raise RuntimeError("Thieu Media Source bat buoc trong Scene '%s': %s" % (SCENE_NAME, ", ".join(missing)))
 
     async def reset_obs_display_state(self) -> None:
-        """Dọn dẹp sạch toàn bộ hiển thị OBS khi khởi động/kết nối lại: Ẩn Action sources, Bật Idle sources."""
+        """Reset OBS into either numbered-layer mode or legacy single-source mode."""
         if self.mock_mode or not self._client:
             return
 
         try:
             await self._refresh_scene_items_cache()
+            scene_items = self._scene_items_cache or {}
+            layered_indices = self._get_complete_layer_indices(scene_items)
+            layered_mode = bool(layered_indices)
+            active_numbered_idles = {f"Idle_Source_{idx}" for idx in layered_indices}
             action_sources = ["Action_Source_All", ACTION_SOURCE_NAME] + [f"Action_Source_{i}" for i in range(1, CHARACTER_COUNT + 1)]
-            idle_sources = [IDLE_SOURCE_NAME] + [f"Idle_Source_{i}" for i in range(1, CHARACTER_COUNT + 1)]
+            numbered_idle_sources = [f"Idle_Source_{i}" for i in range(1, CHARACTER_COUNT + 1)]
 
             # 1. Ẩn toàn bộ Action sources & dừng media cũ
             for asrc in action_sources:
@@ -568,15 +572,32 @@ class ObsController:
                         await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=iid, enabled=False)
                         await self._request("trigger_media_input_action", name=asrc, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
 
-            # 2. Bật lại toàn bộ Idle sources nền
-            for isrc in idle_sources:
+            # Numbered video layers and the old shared source must not overlap.
+            for isrc in [IDLE_SOURCE_NAME] + numbered_idle_sources:
                 iid = await self._get_scene_item_id(isrc)
                 if iid is not None:
+                    should_enable = isrc in active_numbered_idles if layered_mode else isrc == IDLE_SOURCE_NAME
                     with contextlib.suppress(Exception):
-                        await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=iid, enabled=True)
-                        await self._request("trigger_media_input_action", name=isrc, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
+                        await self._request(
+                            "set_scene_item_enabled",
+                            scene_name=SCENE_NAME,
+                            item_id=iid,
+                            enabled=should_enable,
+                        )
+                        await self._request(
+                            "trigger_media_input_action",
+                            name=isrc,
+                            action=(
+                                "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"
+                                if should_enable
+                                else "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP"
+                            ),
+                        )
 
-            LOGGER.info("[OBS] Da tu dong don dep du lieu cu tren OBS va khoi phục Che Do Cho sach")
+            LOGGER.info(
+                "[OBS] Da reset hien thi theo che do %s",
+                "video rieng " + ", ".join(map(str, layered_indices)) if layered_mode else "1 video chung",
+            )
         except Exception as exc:
             LOGGER.debug("reset_obs_display_state exception: %s", exc)
 
@@ -819,6 +840,14 @@ class ObsController:
             item_id = self._scene_items_cache.get(source_name) if self._scene_items_cache else None
         return item_id
 
+    def _get_complete_layer_indices(self, scene_items: dict[str, int] | None = None) -> list[int]:
+        items = scene_items if scene_items is not None else (self._scene_items_cache or {})
+        return [
+            idx
+            for idx in range(1, CHARACTER_COUNT + 1)
+            if f"Idle_Source_{idx}" in items and f"Action_Source_{idx}" in items
+        ]
+
     def _get_sources_for_target(self, target_char: str = "char1") -> tuple[str, str]:
         target = str(target_char).lower().strip()
         raw_idx = target.removeprefix("char")
@@ -832,7 +861,12 @@ class ObsController:
             return (IDLE_SOURCE_NAME, ACTION_SOURCE_NAME)
         if target == "all":
             scene_items = self._scene_items_cache or {}
-            action_name = "Action_Source_All" if self.mock_mode or "Action_Source_All" in scene_items else ACTION_SOURCE_NAME
+            has_complete_layers = bool(self._get_complete_layer_indices(scene_items))
+            action_name = (
+                "Action_Source_All"
+                if self.mock_mode or ("Action_Source_All" in scene_items and has_complete_layers)
+                else ACTION_SOURCE_NAME
+            )
             return (IDLE_SOURCE_NAME, action_name)
         return (IDLE_SOURCE_NAME, ACTION_SOURCE_NAME)
 
@@ -869,7 +903,7 @@ class ObsController:
         target_norm = str(target_char).lower().strip()
         if target_norm == "all":
             scene_items = self._scene_items_cache or {}
-            layered_idle_sources = [f"Idle_Source_{i}" for i in range(1, CHARACTER_COUNT + 1) if f"Idle_Source_{i}" in scene_items]
+            layered_idle_sources = [f"Idle_Source_{i}" for i in self._get_complete_layer_indices(scene_items)]
             layered = "Action_Source_All" in scene_items and bool(layered_idle_sources)
             target_action_source = "Action_Source_All" if layered else ACTION_SOURCE_NAME
             action_item_id = await self._get_scene_item_id(target_action_source)
@@ -877,6 +911,21 @@ class ObsController:
 
             if visible:
                 await self._move_action_above_idle(target_action_source, idle_sources)
+                if layered and IDLE_SOURCE_NAME in scene_items:
+                    legacy_idle_item_id = await self._get_scene_item_id(IDLE_SOURCE_NAME)
+                    if legacy_idle_item_id is not None:
+                        await self._request(
+                            "set_scene_item_enabled",
+                            scene_name=SCENE_NAME,
+                            item_id=legacy_idle_item_id,
+                            enabled=False,
+                        )
+                        with contextlib.suppress(Exception):
+                            await self._request(
+                                "trigger_media_input_action",
+                                name=IDLE_SOURCE_NAME,
+                                action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP",
+                            )
                 if action_item_id is not None:
                     await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=action_item_id, enabled=True)
                 with contextlib.suppress(Exception):
@@ -902,11 +951,32 @@ class ObsController:
         else:
             idle_name, action_name = self._get_sources_for_target(target_char)
             action_item_id = await self._get_scene_item_id(action_name)
-            idle_item_id = await self._get_scene_item_id(idle_name)
-            layered = idle_name.startswith("Idle_Source_") and action_name.startswith("Action_Source_")
+            scene_items = self._scene_items_cache or {}
+            complete_layer_indices = self._get_complete_layer_indices(scene_items)
+            layered_idle_sources = [f"Idle_Source_{idx}" for idx in complete_layer_indices]
+            target_layered = idle_name.startswith("Idle_Source_") and action_name.startswith("Action_Source_")
+            fallback_over_layers = bool(layered_idle_sources) and not target_layered
+            displayed_idle_sources = layered_idle_sources if fallback_over_layers else [idle_name]
 
             if visible:
-                await self._move_action_above_idle(action_name, [idle_name])
+                await self._move_action_above_idle(action_name, displayed_idle_sources)
+                if (
+                    (target_layered and IDLE_SOURCE_NAME != idle_name) or fallback_over_layers
+                ) and IDLE_SOURCE_NAME in scene_items:
+                    legacy_idle_item_id = await self._get_scene_item_id(IDLE_SOURCE_NAME)
+                    if legacy_idle_item_id is not None:
+                        with contextlib.suppress(Exception):
+                            await self._request(
+                                "set_scene_item_enabled",
+                                scene_name=SCENE_NAME,
+                                item_id=legacy_idle_item_id,
+                                enabled=False,
+                            )
+                            await self._request(
+                                "trigger_media_input_action",
+                                name=IDLE_SOURCE_NAME,
+                                action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP",
+                            )
                 if action_item_id is not None:
                     await self._request(
                         "set_scene_item_enabled",
@@ -917,24 +987,32 @@ class ObsController:
                 with contextlib.suppress(Exception):
                     await self._request("trigger_media_input_action", name=action_name, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
                 await asyncio.sleep(0.08)
-                if idle_item_id is not None:
-                    await self._request(
-                        "set_scene_item_enabled",
-                        scene_name=SCENE_NAME,
-                        item_id=idle_item_id,
-                        enabled=False,
-                    )
+                for source_name in displayed_idle_sources:
+                    source_item_id = await self._get_scene_item_id(source_name)
+                    if source_item_id is not None:
+                        await self._request(
+                            "set_scene_item_enabled",
+                            scene_name=SCENE_NAME,
+                            item_id=source_item_id,
+                            enabled=False,
+                        )
             else:
-                if idle_item_id is not None:
-                    await self._request(
-                        "set_scene_item_enabled",
-                        scene_name=SCENE_NAME,
-                        item_id=idle_item_id,
-                        enabled=True,
-                    )
-                    with contextlib.suppress(Exception):
-                        await self._request("trigger_media_input_action", name=idle_name, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY")
-                await asyncio.sleep(0.12 if layered else 0.35)
+                for source_name in displayed_idle_sources:
+                    source_item_id = await self._get_scene_item_id(source_name)
+                    if source_item_id is not None:
+                        await self._request(
+                            "set_scene_item_enabled",
+                            scene_name=SCENE_NAME,
+                            item_id=source_item_id,
+                            enabled=True,
+                        )
+                        with contextlib.suppress(Exception):
+                            await self._request(
+                                "trigger_media_input_action",
+                                name=source_name,
+                                action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY",
+                            )
+                await asyncio.sleep(0.12 if target_layered or fallback_over_layers else 0.35)
                 if action_item_id is not None:
                     await self._request(
                         "set_scene_item_enabled",
@@ -1400,9 +1478,7 @@ class TikTokObsApp:
     async def run(self) -> None:
         try:
             await self.obs.connect()
-            for idx in range(1, CHARACTER_COUNT + 1):
-                with contextlib.suppress(Exception):
-                    await self.obs.set_idle_video(get_idle_video_path(idx), f"char{idx}")
+            await self.obs.sync_all_idle_videos()
             await self.update_queue_display()
         except Exception as exc:
             LOGGER.error("Auto-setup OBS khi khoi dong: %s", exc)
