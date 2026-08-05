@@ -456,8 +456,40 @@ class ObsController:
 
                 # 2. Cập nhật cache và đảm bảo 2 Nguồn mặc định (Idle_Source & Action_Source) tồn tại trong OBS
                 await self.ensure_default_sources_exist()
+                # 3. Dọn dẹp dữ liệu cũ trên OBS: Ẩn tất cả Action Source cũ và bật lại Video Nền sạch
+                await self.reset_obs_display_state()
             except Exception as exc:
                 LOGGER.warning("Auto-setup OBS Media Sources: %s", exc)
+
+    async def reset_obs_display_state(self) -> None:
+        """Dọn dẹp sạch toàn bộ hiển thị OBS khi khởi động/kết nối lại: Ẩn Action sources, Bật Idle sources."""
+        if self.mock_mode or not self._client:
+            return
+
+        try:
+            await self._refresh_scene_items_cache()
+            action_sources = ["Action_Source_All", ACTION_SOURCE_NAME] + [f"Action_Source_{i}" for i in range(1, 5)]
+            idle_sources = [IDLE_SOURCE_NAME] + [f"Idle_Source_{i}" for i in range(1, 5)]
+
+            # 1. Ẩn toàn bộ Action sources & dừng media cũ
+            for asrc in action_sources:
+                iid = await self._get_scene_item_id(asrc)
+                if iid is not None:
+                    with contextlib.suppress(Exception):
+                        await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=iid, enabled=False)
+                        await self._request("trigger_media_input_action", name=asrc, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
+
+            # 2. Bật lại toàn bộ Idle sources nền
+            for isrc in idle_sources:
+                iid = await self._get_scene_item_id(isrc)
+                if iid is not None:
+                    with contextlib.suppress(Exception):
+                        await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=iid, enabled=True)
+                        await self._request("trigger_media_input_action", name=isrc, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
+
+            LOGGER.info("[OBS] Da tu dong don dep du lieu cu tren OBS va khoi phục Che Do Cho sach")
+        except Exception as exc:
+            LOGGER.debug("reset_obs_display_state exception: %s", exc)
 
     async def ensure_default_sources_exist(self) -> None:
         if self.mock_mode or not self._client:
