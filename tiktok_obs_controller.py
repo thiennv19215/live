@@ -104,11 +104,15 @@ IDLE_SOURCE_NAME = str(_saved_obs_cfg.get("idle_source_name", IDLE_SOURCE_NAME))
 ACTION_SOURCE_NAME = str(_saved_obs_cfg.get("action_source_name", ACTION_SOURCE_NAME))
 CHARACTER_COUNT = max(1, int(_saved_obs_cfg.get("character_count", 4)))
 _saved_idle_paths = _saved_obs_cfg.get("idle_video_paths", {})
+_has_dynamic_idle_paths = "idle_video_paths" in _saved_obs_cfg and isinstance(_saved_idle_paths, dict)
 IDLE_VIDEO_PATHS: dict[int, Path] = {}
 for _idx in range(1, CHARACTER_COUNT + 1):
     _legacy_path = _saved_obs_cfg.get(f"idle_video_path_{_idx}")
-    _dynamic_path = _saved_idle_paths.get(str(_idx)) if isinstance(_saved_idle_paths, dict) else None
-    IDLE_VIDEO_PATHS[_idx] = Path(str(_dynamic_path or _legacy_path or (VIDEO_DIRECTORY / f"idle_loop_{_idx}.mp4")))
+    if _has_dynamic_idle_paths:
+        _configured_path = _saved_idle_paths.get(str(_idx), VIDEO_DIRECTORY / f"__unassigned_idle_{_idx}__.mp4")
+    else:
+        _configured_path = _legacy_path or (VIDEO_DIRECTORY / f"idle_loop_{_idx}.mp4")
+    IDLE_VIDEO_PATHS[_idx] = Path(str(_configured_path))
 IDLE_VIDEO_PATH_1 = IDLE_VIDEO_PATHS.get(1, IDLE_VIDEO_PATH_1)
 IDLE_VIDEO_PATH_2 = IDLE_VIDEO_PATHS.get(2, IDLE_VIDEO_PATH_2)
 IDLE_VIDEO_PATH_3 = IDLE_VIDEO_PATHS.get(3, IDLE_VIDEO_PATH_3)
@@ -613,18 +617,57 @@ class ObsController:
         except Exception as exc:
             LOGGER.debug("ensure_default_sources_exist exception: %s", exc)
 
-    async def ensure_character_layer_sources_exist(self) -> list[str]:
-        """Create or attach the OBS media sources required by layered character mode."""
+    async def ensure_character_layer_sources_exist(
+        self,
+        character_indices: list[int] | None = None,
+        *,
+        remove_inactive: bool = False,
+    ) -> list[str]:
+        """Reconcile layered OBS sources for characters that have real media."""
         if self.mock_mode or not self._client:
             return []
 
         await self._refresh_scene_items_cache()
+        active_indices = sorted({
+            idx for idx in (
+                character_indices
+                if character_indices is not None
+                else [
+                    candidate
+                    for candidate in range(1, CHARACTER_COUNT + 1)
+                    if resolve_existing_media_path(get_idle_video_path(candidate)).is_file()
+                ]
+            )
+            if 1 <= idx <= CHARACTER_COUNT
+        })
+
+        if remove_inactive:
+            active_set = set(active_indices)
+            removable: list[tuple[str, int]] = []
+            for source_name, item_id in (self._scene_items_cache or {}).items():
+                for prefix in ("Idle_Source_", "Action_Source_"):
+                    suffix = source_name.removeprefix(prefix)
+                    if source_name.startswith(prefix) and suffix.isdigit() and int(suffix) not in active_set:
+                        removable.append((source_name, item_id))
+                        break
+            if not active_indices and "Action_Source_All" in (self._scene_items_cache or {}):
+                removable.append(("Action_Source_All", self._scene_items_cache["Action_Source_All"]))
+            for source_name, item_id in removable:
+                try:
+                    await self._request("remove_scene_item", scene_name=SCENE_NAME, item_id=item_id)
+                    LOGGER.info("[OBS] Da go source khong co video: %s", source_name)
+                except Exception as exc:
+                    LOGGER.warning("Khong the go source khong con video %s: %s", source_name, exc)
+            if removable:
+                await self._refresh_scene_items_cache()
+
         created: list[str] = []
         source_specs = []
-        for idx in range(1, CHARACTER_COUNT + 1):
+        for idx in active_indices:
             source_specs.append((f"Idle_Source_{idx}", True))
             source_specs.append((f"Action_Source_{idx}", False))
-        source_specs.append(("Action_Source_All", False))
+        if active_indices:
+            source_specs.append(("Action_Source_All", False))
 
         for source_name, enabled in source_specs:
             if source_name in (self._scene_items_cache or {}):
@@ -1011,6 +1054,12 @@ class ObsController:
         video_path = resolve_existing_media_path(video_path)
         if not self.mock_mode and not video_path.is_file():
             raise FileNotFoundError(f"Khong tim thay video Idle: {video_path}")
+        target_index = str(target_char).lower().strip().removeprefix("char")
+        if not self.mock_mode and target_index.isdigit():
+            preferred_source = f"Idle_Source_{target_index}"
+            await self._refresh_scene_items_cache()
+            if preferred_source not in (self._scene_items_cache or {}):
+                await self.ensure_character_layer_sources_exist([int(target_index)])
         async with self._media_config_lock:
             if not self.mock_mode:
                 await self._refresh_scene_items_cache()
@@ -1061,14 +1110,18 @@ class ObsController:
 
     async def sync_all_idle_videos(self) -> dict[str, list[str]]:
         """Create missing character layers and sync every existing Idle file to OBS."""
-        result: dict[str, list[str]] = {"synced": [], "missing": [], "errors": []}
+        result: dict[str, list[str]] = {"synced": [], "skipped": [], "errors": []}
+        active_indices = [
+            idx for idx in range(1, CHARACTER_COUNT + 1)
+            if resolve_existing_media_path(get_idle_video_path(idx)).is_file()
+        ]
         if not self.mock_mode:
-            await self.ensure_character_layer_sources_exist()
+            await self.ensure_character_layer_sources_exist(active_indices, remove_inactive=True)
         for idx in range(1, CHARACTER_COUNT + 1):
             target = f"char{idx}"
             path = resolve_existing_media_path(get_idle_video_path(idx))
             if not path.is_file():
-                result["missing"].append(target)
+                result["skipped"].append(target)
                 continue
             try:
                 await self.set_idle_video(path, target)
@@ -1076,9 +1129,9 @@ class ObsController:
             except Exception as exc:
                 result["errors"].append(f"{target}: {exc}")
         LOGGER.info(
-            "[OBS] Dong bo Idle hoan tat: %s thanh cong, %s thieu file, %s loi",
+            "[OBS] Dong bo Idle hoan tat: %s thanh cong, %s chua chon video, %s loi",
             len(result["synced"]),
-            len(result["missing"]),
+            len(result["skipped"]),
             len(result["errors"]),
         )
         return result

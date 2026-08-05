@@ -188,7 +188,7 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
                 result = await obs.sync_all_idle_videos()
 
             self.assertEqual(result["synced"], ["char1", "char2"])
-            self.assertEqual(result["missing"], ["char3"])
+            self.assertEqual(result["skipped"], ["char3"])
             self.assertEqual(result["errors"], [])
             self.assertEqual(set_idle.await_count, 2)
         finally:
@@ -320,7 +320,7 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
             patch.object(obs, "_request", new=AsyncMock()) as request,
             patch.object(obs, "reset_obs_display_state", new=AsyncMock()),
         ):
-            created = await obs.ensure_character_layer_sources_exist()
+            created = await obs.ensure_character_layer_sources_exist([1, 2, 3, 4])
 
         self.assertEqual(len(created), 9)
         created_names = {
@@ -331,6 +331,47 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Idle_Source_1", created_names)
         self.assertIn("Action_Source_4", created_names)
         self.assertIn("Action_Source_All", created_names)
+
+    async def test_character_layer_sync_removes_characters_without_video(self) -> None:
+        """Full sync only keeps numbered scene items for characters with real media."""
+        obs = core.ObsController(mock_mode=False)
+        obs._client = object()
+        obs.is_connected = True
+        obs._scene_items_cache = {
+            "Idle_Source_1": 11,
+            "Action_Source_1": 12,
+            "Idle_Source_2": 21,
+            "Action_Source_2": 22,
+            "Action_Source_All": 30,
+        }
+
+        async def refresh() -> dict[str, int]:
+            return obs._scene_items_cache
+
+        async def request(method_name: str, **kwargs: object) -> None:
+            if method_name == "remove_scene_item":
+                removed_id = kwargs["item_id"]
+                obs._scene_items_cache = {
+                    name: item_id
+                    for name, item_id in obs._scene_items_cache.items()
+                    if item_id != removed_id
+                }
+
+        with (
+            patch.object(obs, "_refresh_scene_items_cache", side_effect=refresh),
+            patch.object(obs, "_request", side_effect=request) as mocked_request,
+            patch.object(obs, "reset_obs_display_state", new=AsyncMock()),
+        ):
+            await obs.ensure_character_layer_sources_exist([1], remove_inactive=True)
+
+        removed_ids = [
+            call.kwargs["item_id"]
+            for call in mocked_request.await_args_list
+            if call.args and call.args[0] == "remove_scene_item"
+        ]
+        self.assertEqual(removed_ids, [21, 22])
+        self.assertIn("Idle_Source_1", obs._scene_items_cache)
+        self.assertNotIn("Idle_Source_2", obs._scene_items_cache)
 
     async def test_obs_socket_disconnect_reconnects_and_retries(self) -> None:
         """Kiểm tra WebSocket đóng giữa chừng sẽ kết nối lại và gửi lại lệnh."""

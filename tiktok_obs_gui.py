@@ -869,8 +869,8 @@ class TikTokObsGui:
                     current_label.configure(text="!", fg=COLOR_ROSE)
 
             self._submit_obs_operation(
-                f"xóa video Idle NV{idx}",
-                self.app.obs.clear_idle_video(target_char),
+                f"xóa video và source OBS của NV{idx}",
+                self.app.obs.remove_character_layer(idx),
                 on_success=_keep_cleared_status,
                 status_char=target_char,
             )
@@ -887,20 +887,20 @@ class TikTokObsGui:
 
         def _sync_done(result: dict[str, list[str]]) -> None:
             synced = set(result["synced"])
-            missing = set(result["missing"])
+            skipped = set(result["skipped"])
             error_chars = {item.split(":", 1)[0] for item in result["errors"]}
             for char, label in self.idle_status_labels.items():
                 if char in synced:
                     label.configure(text="●", fg=COLOR_EMERALD)
-                elif char in missing or char in error_chars:
+                elif char in skipped or char in error_chars:
                     label.configure(text="!", fg=COLOR_ROSE)
             self.status_text.set(
-                f"OBS ĐÃ NHẬN {len(synced)} VIDEO | THIẾU {len(missing)} | LỖI {len(result['errors'])}"
+                f"OBS ĐÃ NHẬN {len(synced)} VIDEO | BỎ QUA {len(skipped)} Ô TRỐNG | LỖI {len(result['errors'])}"
             )
             logging.getLogger(__name__).info(
-                "Đồng bộ toàn bộ OBS: %s thành công, %s thiếu file, %s lỗi",
+                "Đồng bộ toàn bộ OBS: %s thành công, %s ô chưa chọn video, %s lỗi",
                 len(synced),
-                len(missing),
+                len(skipped),
                 len(result["errors"]),
             )
 
@@ -930,11 +930,6 @@ class TikTokObsGui:
         self._render_idle_character_rows()
         self._refresh_cards_container()
         self._refresh_stream_deck_grid()
-        if self.app and self.run_loop and self.app.obs.is_connected and not self.app.mock_mode:
-            self._submit_obs_operation(
-                f"tạo source cho Nhân vật {new_index}",
-                self.app.obs.ensure_character_layer_sources_exist(),
-            )
         logging.getLogger(__name__).info("Đã thêm Nhân vật %s", new_index)
 
     def remove_last_character(self) -> None:
@@ -997,11 +992,11 @@ class TikTokObsGui:
             messagebox.showwarning("Chưa kết nối OBS", "Hãy kết nối OBS thật trước khi tạo source layer.", parent=self.root)
             return
         self._submit_obs_operation(
-            f"đồng bộ source cho {core.CHARACTER_COUNT} nhân vật",
-            self.app.obs.ensure_character_layer_sources_exist(),
+            "đồng bộ source cho các nhân vật có video",
+            self.app.obs.sync_all_idle_videos(),
             on_success=lambda created: logging.getLogger(__name__).info(
-                "OBS đã đồng bộ source nhân vật; tạo/gắn mới: %s",
-                len(created),
+                "OBS đã đồng bộ source nhân vật có video: %s",
+                len(created["synced"]),
             ),
         )
 
@@ -1686,7 +1681,12 @@ class TikTokObsGui:
             port = int(self.obs_port.get())
         except ValueError:
             port = core.OBS_PORT
-        core.save_obs_config({
+        assigned_paths = {
+            str(idx): str(path)
+            for idx, path in core.IDLE_VIDEO_PATHS.items()
+            if idx <= core.CHARACTER_COUNT and core.resolve_existing_media_path(path).is_file()
+        }
+        config = {
             "tiktok_username": self.username.get().strip().lstrip("@") or "mock_user",
             "obs_host": self.obs_host.get().strip(),
             "obs_port": port,
@@ -1694,13 +1694,13 @@ class TikTokObsGui:
             "scene_name": self.scene_name.get().strip(),
             "idle_source_name": self.idle_source.get().strip(),
             "action_source_name": self.action_source.get().strip(),
-            "idle_video_path_1": str(core.IDLE_VIDEO_PATH_1),
-            "idle_video_path_2": str(core.IDLE_VIDEO_PATH_2),
-            "idle_video_path_3": str(core.IDLE_VIDEO_PATH_3),
-            "idle_video_path_4": str(core.IDLE_VIDEO_PATH_4),
             "character_count": core.CHARACTER_COUNT,
-            "idle_video_paths": {str(idx): str(path) for idx, path in core.IDLE_VIDEO_PATHS.items()},
-        })
+            "idle_video_paths": assigned_paths,
+        }
+        for idx in range(1, 5):
+            if str(idx) in assigned_paths:
+                config[f"idle_video_path_{idx}"] = assigned_paths[str(idx)]
+        core.save_obs_config(config)
 
     def _apply_config(self) -> bool:
         if not self.mock_mode_var.get():
