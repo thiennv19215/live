@@ -91,6 +91,18 @@ class ObsSettingsMixin:
 
         tk.Button(idle_box, text="⟳ GỬI VIDEO NỀN SANG OBS", font=("Segoe UI", 8, "bold"), bg="#164e63", fg="#cffafe", activebackground=COLOR_CYAN, activeforeground="#083344", relief="flat", pady=5, command=self.sync_all_videos_to_obs).pack(fill="x", pady=(7, 0))
 
+        overlay_box = tk.Frame(panel, bg="#0b1f1d", highlightbackground=COLOR_EMERALD, highlightthickness=1, padx=8, pady=6)
+        overlay_box.pack(fill="x", pady=(0, 5))
+        overlay_header = tk.Frame(overlay_box, bg="#0b1f1d")
+        overlay_header.pack(fill="x")
+        tk.Label(overlay_header, text="📡 BROWSER OVERLAY", font=("Segoe UI", 9, "bold"), fg=COLOR_EMERALD, bg="#0b1f1d").pack(side="left")
+        tk.Label(overlay_header, textvariable=self.overlay_status, font=("Segoe UI", 7, "bold"), fg="#a7f3d0", bg="#0b1f1d").pack(side="right")
+        tk.Label(overlay_box, textvariable=self.overlay_url, font=("Cascadia Mono", 8), fg=COLOR_CYAN, bg="#071613", anchor="w", padx=5, pady=3).pack(fill="x", pady=(3, 0))
+        overlay_buttons = tk.Frame(overlay_box, bg="#0b1f1d")
+        overlay_buttons.pack(fill="x", pady=(4, 0))
+        tk.Button(overlay_buttons, text="COPY URL", font=("Segoe UI", 8, "bold"), bg=COLOR_EMERALD, fg="#042f2e", relief="flat", padx=8, pady=3, command=self.copy_overlay_url, cursor="hand2").pack(side="left", fill="x", expand=True, padx=(0, 3))
+        tk.Button(overlay_buttons, text="MỞ PREVIEW", font=("Segoe UI", 8, "bold"), bg="#164e63", fg="#cffafe", relief="flat", padx=8, pady=3, command=self.open_overlay_preview, cursor="hand2").pack(side="left", fill="x", expand=True, padx=(3, 0))
+
         # Dedicated OBS Settings & Open Folder Buttons
         btn_obs_cfg = tk.Button(panel, text="⚙ Cài Đặt Kết Nối OBS Studio", font=("Segoe UI", 9, "bold"), bg="#1e293b", fg=COLOR_CYAN, activebackground=COLOR_CYAN, activeforeground="#000", relief="flat", padx=6, pady=5, command=self.open_obs_settings_dialog)
         btn_obs_cfg.pack(fill="x", pady=(4, 4))
@@ -168,6 +180,7 @@ class ObsSettingsMixin:
 
     def clear_idle_video(self) -> None:
         core.set_idle_video_path("main", core.VIDEO_DIRECTORY / "__unassigned_idle__.mp4")
+        self.overlay.set_idle_path(None)
         self.idle_video_name_vars["main"].set("(Chưa chọn video nền)")
         self._persist_runtime_config()
         label = self.idle_status_labels.get("main")
@@ -392,6 +405,7 @@ class ObsSettingsMixin:
         if filename:
             path = Path(filename)
             core.set_idle_video_path("main", path)
+            self.overlay.set_idle_path(core.resolve_existing_media_path(path))
             self.idle_video_name_vars["main"].set(shorten_filename(path.name, 24))
             self._persist_runtime_config()
             self._refresh_idle_file_statuses()

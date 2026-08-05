@@ -39,6 +39,8 @@ from obsws_python import ReqClient
 from obsws_python.error import OBSSDKTimeoutError
 from websocket import WebSocketConnectionClosedException, WebSocketTimeoutException
 
+from tiktok_overlay import LocalOverlayServer
+
 
 # ============================== Cau hinh ===============================
 TIKTOK_USERNAME = "your_tiktok_username"
@@ -1194,11 +1196,17 @@ def get_video_duration(video_path: Path) -> float:
 
 
 class TikTokObsApp:
-    def __init__(self, mock_mode: bool = False, enable_tiktok: bool = False) -> None:
+    def __init__(
+        self,
+        mock_mode: bool = False,
+        enable_tiktok: bool = False,
+        overlay: LocalOverlayServer | None = None,
+    ) -> None:
         self.mock_mode = mock_mode
         self.enable_tiktok = enable_tiktok
         self.queue = PriorityGiftQueue()
         self.obs = ObsController(mock_mode=mock_mode)
+        self.overlay = overlay
         self._stop_event = asyncio.Event()
         self._current_interrupt: asyncio.Event | None = None
         self.is_tiktok_connected: bool = False
@@ -1330,9 +1338,22 @@ class TikTokObsApp:
         await self.update_queue_display()
 
         try:
-            await self.obs.play_action(job.file_path, sound_path=job.sound_path, target_char=job.target_char)
+            if self.overlay:
+                self.overlay.show_action(job.file_path, sound_path=job.sound_path, label=job.gift_name)
+
+            obs_playing = False
+            try:
+                await self.obs.play_action(job.file_path, sound_path=job.sound_path, target_char=job.target_char)
+                obs_playing = True
+            except Exception as exc:
+                if not self.overlay:
+                    raise
+                LOGGER.warning("OBS khong phat duoc action; tiep tuc bang Browser Overlay: %s", exc)
+
             playback_task = asyncio.create_task(
                 self.obs.wait_for_action_end(job.target_char, self.current_job_duration)
+                if obs_playing
+                else asyncio.sleep(self.current_job_duration)
             )
             interrupt_task = asyncio.create_task(interrupt.wait())
             done, pending = await asyncio.wait(
@@ -1345,6 +1366,8 @@ class TikTokObsApp:
                 LOGGER.info("Video %s da bi bo qua theo yeu cau nguoi dung", job.gift_name)
         finally:
             stop_sound_file()
+            if self.overlay:
+                self.overlay.show_idle()
             self._current_interrupt = None
             self.current_job = None
             self.current_job_start_time = 0.0

@@ -10,11 +10,13 @@ import queue
 import threading
 import time
 import tkinter as tk
+import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable
 
 import tiktok_obs_controller as core
+from tiktok_overlay import LocalOverlayServer
 
 from tiktok_obs_gui_mapping import GiftMappingMixin
 from tiktok_obs_gui_settings import ObsSettingsMixin
@@ -91,6 +93,15 @@ class TikTokObsGui(ObsSettingsMixin, GiftMappingMixin):
         self.idle_video_name_vars["main"] = tk.StringVar(
             value=shorten_filename(core.resolve_existing_media_path(idle_path).name, 24)
         )
+        self.overlay = LocalOverlayServer(core.resolve_existing_media_path(idle_path))
+        try:
+            overlay_url = self.overlay.start()
+            overlay_status = "ONLINE · 1080x1920"
+        except OSError as exc:
+            overlay_url = "Overlay chưa khởi động"
+            overlay_status = f"OFFLINE · {exc}"
+        self.overlay_url = tk.StringVar(value=overlay_url)
+        self.overlay_status = tk.StringVar(value=overlay_status)
 
         # Mặc định False để kết nối OBS thật khi bấm nút
         self.mock_mode_var = tk.BooleanVar(value=False)
@@ -151,7 +162,7 @@ class TikTokObsGui(ObsSettingsMixin, GiftMappingMixin):
         title_box = ttk.Frame(header)
         title_box.pack(side="left")
         ttk.Label(title_box, text="TikTok Live Control Room", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(title_box, text="Một video nền · Quà đến là gọi hành động trên OBS", style="Subtitle.TLabel").pack(anchor="w")
+        ttk.Label(title_box, text="Một video nền · Xuất trực tiếp sang TikTok Studio hoặc OBS", style="Subtitle.TLabel").pack(anchor="w")
 
         # Top Right Global Status Indicator
         self.sys_status_pill = StatusPill(header, text="OFFLINE", state_type="offline", width=140, height=32)
@@ -509,7 +520,7 @@ class TikTokObsGui(ObsSettingsMixin, GiftMappingMixin):
     def _run_async(self, mock_mode: bool, enable_tiktok: bool) -> None:
         self.run_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.run_loop)
-        self.app = core.TikTokObsApp(mock_mode=mock_mode, enable_tiktok=enable_tiktok)
+        self.app = core.TikTokObsApp(mock_mode=mock_mode, enable_tiktok=enable_tiktok, overlay=self.overlay)
         self.run_future = self.run_loop.create_task(self.app.run())
         try:
             self.run_loop.run_until_complete(self.run_future)
@@ -543,10 +554,13 @@ class TikTokObsGui(ObsSettingsMixin, GiftMappingMixin):
             self.btn_stop.configure(state="disabled")
 
     def _check_connection_and_prompt(self, action_name: str, on_connected: callable) -> None:
-        if not self.app or not self.run_loop or not self.app.obs.is_connected:
+        if self.app and self.run_loop and (self.app.obs.is_connected or self.overlay.is_running):
+            on_connected()
+            return
+        if not self.app or not self.run_loop:
             ans = messagebox.askyesno(
-                "Chưa Kết Nối OBS Studio",
-                f"Hệ thống chưa kết nối thành công tới OBS Studio.\n\n"
+                "Hệ thống chưa chạy",
+                "Hãy bấm Bắt đầu để xử lý queue và phát Browser Overlay.\n\n"
                 f"Bạn có muốn TỰ ĐỘNG BẬT CHẾ ĐỘ GIẢ LẬP (Mock Mode) để Test '{action_name}' ngay không?"
             )
             if ans:
@@ -555,8 +569,11 @@ class TikTokObsGui(ObsSettingsMixin, GiftMappingMixin):
                 self.root.after(200, self.start)
                 self.root.after(600, on_connected)
             return
-
-        on_connected()
+        messagebox.showerror(
+            "Không có đầu ra hình",
+            "Cả Browser Overlay và OBS đều đang offline. Hãy khởi động lại ứng dụng hoặc kiểm tra cổng overlay.",
+            parent=self.root,
+        )
 
     def test_gift(self, gift: str) -> None:
         def _do() -> None:
@@ -627,6 +644,18 @@ class TikTokObsGui(ObsSettingsMixin, GiftMappingMixin):
     def open_video_folder(self) -> None:
         core.VIDEO_DIRECTORY.mkdir(parents=True, exist_ok=True)
         os.startfile(core.VIDEO_DIRECTORY)
+
+    def copy_overlay_url(self) -> None:
+        url = self.overlay_url.get()
+        self.root.clipboard_clear()
+        self.root.clipboard_append(url)
+        self.status_text.set("ĐÃ COPY URL OVERLAY · DÁN VÀO TIKTOK STUDIO")
+
+    def open_overlay_preview(self) -> None:
+        if not self.overlay.is_running:
+            messagebox.showerror("Overlay Offline", "Local Browser Overlay chưa khởi động được.", parent=self.root)
+            return
+        webbrowser.open(f"{self.overlay.url}?debug=1&muted=1")
 
     def _refresh_dashboard(self) -> None:
         if self.app:
@@ -761,6 +790,7 @@ class TikTokObsGui(ObsSettingsMixin, GiftMappingMixin):
         if worker_alive and time.monotonic() < self._close_deadline:
             self.root.after(100, self._wait_for_shutdown_before_close)
             return
+        self.overlay.stop()
         self.root.destroy()
 
 
