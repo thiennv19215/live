@@ -186,6 +186,39 @@ class CanvasProgressBar(tk.Canvas):
                 self.create_rectangle(r, 0, fw - r, h, fill=COLOR_CYAN, outline="")
 
 
+class ToolTip:
+    """Hiển thị gợi ý popup khi di chuột qua widget."""
+
+    def __init__(self, widget: tk.Widget, text_func: callable) -> None:
+        self.widget = widget
+        self.text_func = text_func
+        self.tip_window: tk.Toplevel | None = None
+        self.widget.bind("<Enter>", self.show_tip, add="+")
+        self.widget.bind("<Leave>", self.hide_tip, add="+")
+
+    def show_tip(self, event=None) -> None:
+        self.hide_tip()
+        try:
+            text = self.text_func()
+        except Exception:
+            return
+        if not text:
+            return
+        x = self.widget.winfo_rootx() + 10
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 5
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        lbl = tk.Label(tw, text=text, justify="left", bg="#090d16", fg="#38bdf8", relief="solid", borderwidth=1, font=("Segoe UI", 9), padx=10, pady=8)
+        lbl.pack()
+
+    def hide_tip(self, event=None) -> None:
+        if self.tip_window:
+            with contextlib.suppress(Exception):
+                self.tip_window.destroy()
+            self.tip_window = None
+
+
 class GiftMappingCard(tk.Frame):
     """Thẻ quản lý chọn file video, âm thanh, nhân vật & priority cho từng món quà."""
 
@@ -266,6 +299,7 @@ class GiftMappingCard(tk.Frame):
             command=self._choose_video,
         )
         self.btn_video_chip.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ToolTip(self.btn_video_chip, self._get_video_tooltip_text)
 
         # Sound Button Chip (Click trực tiếp để chọn Âm Thanh!)
         self.btn_sound_chip = tk.Button(
@@ -307,11 +341,42 @@ class GiftMappingCard(tk.Frame):
             widget.bind("<Enter>", lambda _: self.configure(bg=CARD_HOVER))
             widget.bind("<Leave>", lambda _: self.configure(bg=CARD_BG))
 
+    def _get_video_tooltip_text(self) -> str:
+        val = self.file_var.get().strip()
+        if val in core.ACTION_PRESETS:
+            preset = core.ACTION_PRESETS[val]
+            lines = [f"⚡ HÀNH ĐỘNG: {preset.name}"]
+            lines.append(f"Kho {len(preset.videos)} điệu nhảy random:")
+            for idx, f in enumerate(preset.videos, 1):
+                lines.append(f"  {idx}. {Path(f).name}")
+            lines.append("\n👉 Click vào nút để chọn lại Hành Động hoặc gán Video trực tiếp.")
+            return "\n".join(lines)
+
+        files = core.parse_video_filenames(val)
+        valid_files = [f for f in files if f]
+        if not valid_files:
+            return "🎥 Chưa gán Hành động/Video nào cho quà này.\n👉 Click nút để gán."
+        if len(valid_files) == 1:
+            return f"🎥 Video đang gán cho {self.gift_key.title()}:\n  • {valid_files[0]}\n\n💡 Mẹo: Click nút để chọn Hành Động từ Kho hoặc gán nhiều video."
+        lines = [f"🎥 Danh sách {len(valid_files)} điệu nhảy random của quà {self.gift_key.title()}:"]
+        for idx, f in enumerate(valid_files, 1):
+            lines.append(f"  {idx}. {Path(f).name}")
+        lines.append("\n👉 Click vào nút để chọn lại hoặc thay đổi danh sách video.")
+        return "\n".join(lines)
+
     def _format_video_label(self) -> str:
-        val = self.file_var.get()
-        if val:
-            return f"🎥 Video: {shorten_filename(val, 16)}"
-        return "🎥 Click Chọn Video..."
+        val = self.file_var.get().strip()
+        if val in core.ACTION_PRESETS:
+            preset = core.ACTION_PRESETS[val]
+            return f"⚡ {preset.name} ({len(preset.videos)} điệu)"
+        elif val:
+            files = core.parse_video_filenames(val)
+            if len(files) > 1:
+                first_name = Path(files[0]).name
+                return f"🎥 Video ({len(files)} điệu): {shorten_filename(first_name, 10)} (+{len(files)-1} random)"
+            elif len(files) == 1 and files[0]:
+                return f"🎥 Video: {shorten_filename(files[0], 16)}"
+        return "🎥 Click Chọn Hành Động / Video..."
 
     def _format_sound_label(self) -> str:
         val = self.sound_var.get()
@@ -338,21 +403,76 @@ class GiftMappingCard(tk.Frame):
 
     def _choose_video(self) -> None:
         top = self.winfo_toplevel()
-        filename = filedialog.askopenfilename(
-            parent=top,
-            title=f"Chọn video cho quà {self.gift_key.title()}",
-            filetypes=[("Media Files", "*.mp4 *.mov *.mkv *.webm *.png *.jpg *.jpeg *.webp"), ("All files", "*.*")],
-        )
-        if filename:
-            path = Path(filename)
-            core.VIDEO_DIRECTORY = path.parent
-            mapped_val = path.name if path.parent == core.VIDEO_DIRECTORY else str(path)
-            self.file_var.set(mapped_val)
-            self.btn_video_chip.configure(text=self._format_video_label(), fg=COLOR_CYAN)
-            self._notify_change()
+        dlg = tk.Toplevel(top)
+        dlg.title(f"Gán Hành Động / Video cho Quà {self.gift_key.title()}")
+        dlg.geometry("520x430")
+        dlg.resizable(False, False)
+        dlg.configure(bg="#0f172a")
+        dlg.transient(top)
+        dlg.grab_set()
+
+        tk.Label(dlg, text=f"🎬 GÁN HÀNH ĐỘNG CHO QUÀ {self.gift_key.upper()}", font=("Segoe UI", 11, "bold"), fg=COLOR_CYAN, bg="#0f172a").pack(anchor="w", padx=16, pady=(14, 10))
+
+        # Option 1: Chọn từ Kho Hành Động (Action Presets)
+        preset_frame = tk.LabelFrame(dlg, text=" ⚡ Tùy chọn 1: Chọn từ Kho Hành Động (Action Presets) ", font=("Segoe UI", 9, "bold"), fg=COLOR_EMERALD, bg="#0f172a", padx=12, pady=10)
+        preset_frame.pack(fill="x", padx=16, pady=6)
+
+        action_names = {aid: f"{p.name} ({len(p.videos)} điệu nhảy)" for aid, p in core.ACTION_PRESETS.items()}
+        cb_values = list(action_names.values())
+
+        curr_val = self.file_var.get().strip()
+        curr_action_display = action_names.get(curr_val, cb_values[0] if cb_values else "")
+        action_var = tk.StringVar(value=curr_action_display)
+
+        cb_action = ttk.Combobox(preset_frame, values=cb_values, textvariable=action_var, state="readonly", font=("Segoe UI", 9))
+        cb_action.pack(fill="x", pady=(4, 8))
+
+        def _apply_preset() -> None:
+            sel_display = action_var.get()
+            selected_aid = None
+            for aid, disp in action_names.items():
+                if disp == sel_display:
+                    selected_aid = aid
+                    break
+            if selected_aid:
+                self.file_var.set(selected_aid)
+                self.btn_video_chip.configure(text=self._format_video_label(), fg=COLOR_CYAN)
+                self._notify_change()
+                dlg.destroy()
+
+        tk.Button(preset_frame, text="✔ Gán Hành Động Này", font=("Segoe UI", 9, "bold"), bg=COLOR_EMERALD, fg="#042f2e", relief="flat", padx=10, pady=4, command=_apply_preset).pack(anchor="e")
+
+        # Option 2: Chọn File Video Trực Tiếp
+        direct_frame = tk.LabelFrame(dlg, text=" 🎥 Tùy chọn 2: Chọn trực tiếp File Video trên máy ", font=("Segoe UI", 9, "bold"), fg=COLOR_CYAN, bg="#0f172a", padx=12, pady=10)
+        direct_frame.pack(fill="x", padx=16, pady=6)
+
+        tk.Label(direct_frame, text="Chọn 1 hoặc nhiều file video (giữ phím Ctrl để chọn nhiều file):", font=("Segoe UI", 8), fg=TEXT_MUTED, bg="#0f172a").pack(anchor="w", pady=(0, 6))
+
+        def _browse_files() -> None:
+            filenames = filedialog.askopenfilenames(
+                parent=dlg,
+                title=f"Chọn video cho quà {self.gift_key.title()}",
+                filetypes=[("Media Files", "*.mp4 *.mov *.mkv *.webm *.png *.jpg *.jpeg *.webp"), ("All files", "*.*")],
+            )
+            if filenames:
+                mapped_vals = []
+                for filename in filenames:
+                    path = Path(filename)
+                    core.VIDEO_DIRECTORY = path.parent
+                    mapped_val = path.name if path.parent == core.VIDEO_DIRECTORY else str(path)
+                    mapped_vals.append(mapped_val)
+                combined_val = ", ".join(mapped_vals)
+                self.file_var.set(combined_val)
+                self.btn_video_chip.configure(text=self._format_video_label(), fg=COLOR_CYAN)
+                self._notify_change()
+                dlg.destroy()
+
+        tk.Button(direct_frame, text="📂 Chọn File Video...", font=("Segoe UI", 9, "bold"), bg=COLOR_AMBER, fg="#000", relief="flat", padx=10, pady=4, command=_browse_files).pack(anchor="e")
+
+        tk.Button(dlg, text="Hủy / Đóng", font=("Segoe UI", 9), bg="#334155", fg="#fff", relief="flat", padx=12, pady=4, command=dlg.destroy).pack(side="right", padx=16, pady=10)
         with contextlib.suppress(Exception):
-            top.lift()
-            top.focus_force()
+            dlg.lift()
+            dlg.focus_force()
 
     def _choose_sound(self) -> None:
         top = self.winfo_toplevel()
@@ -545,23 +665,20 @@ class TikTokObsGui:
         # Left Column: Cấu hình Hệ thống & Video Chờ (Nút Kết Nối Nổi Bật Ở Trên Cùng)
         self._build_settings_panel(body).grid(row=0, column=0, sticky="nsew", padx=(0, 12))
 
-        # Right Column: Hero Live Player + Stream Deck + Visual Gift Video Cards Grid + Logs
+        # Right Column: Stream Deck + Visual Gift Video Cards Grid + Logs
         right_panel = ttk.Frame(body)
         right_panel.grid(row=0, column=1, sticky="nsew")
-        right_panel.rowconfigure(2, weight=1)
+        right_panel.rowconfigure(1, weight=1)
         right_panel.columnconfigure(0, weight=1)
 
-        # 1. Hero Player Card (Video đang phát / Video chờ)
-        self._build_hero_player(right_panel).grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        # 1. Stream Deck Gift Test Buttons
+        self._build_stream_deck(right_panel).grid(row=0, column=0, sticky="ew", pady=(0, 10))
 
-        # 2. Stream Deck Gift Test Buttons
-        self._build_stream_deck(right_panel).grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        # 2. Queue Table & Visual Gift Video Cards Split
+        self._build_queue_and_visual_mapping(right_panel).grid(row=1, column=0, sticky="nsew", pady=(0, 10))
 
-        # 3. Queue Table & Visual Gift Video Cards Split
-        self._build_queue_and_visual_mapping(right_panel).grid(row=2, column=0, sticky="nsew", pady=(0, 10))
-
-        # 4. Logs Console
-        self._build_log_console(right_panel).grid(row=3, column=0, sticky="ew")
+        # 3. Logs Console
+        self._build_log_console(right_panel).grid(row=2, column=0, sticky="ew")
 
     def _create_metric_card(self, parent: ttk.Frame, title: str, col: int, accent_color: str) -> StatusPill:
         card = tk.Frame(parent, bg=CARD_BG, highlightbackground=PANEL_BORDER, highlightthickness=1)
@@ -864,6 +981,7 @@ class TikTokObsGui:
         q_top.pack(fill="x", pady=(0, 6))
         ttk.Label(q_top, text="📋 HÀNG ĐỢI & TRẠNG THÁI PHÁT QÙA", style="PanelTitle.TLabel").pack(side="left")
         ttk.Button(q_top, text="🧹 Xóa Queue", style="Soft.TButton", command=self.clear_queue).pack(side="right")
+        ttk.Button(q_top, text="⏭ Bỏ Qua (Skip)", style="Soft.TButton", command=self.skip_action).pack(side="right", padx=(0, 4))
 
         self.queue_tree = ttk.Treeview(queue_panel, columns=("status", "gift", "file", "prio"), show="headings", height=5)
         self.queue_tree.heading("status", text="Trạng Thái")
@@ -888,6 +1006,9 @@ class TikTokObsGui:
         m_top = ttk.Frame(map_panel, style="Panel.TFrame")
         m_top.pack(fill="x", pady=(0, 6))
         ttk.Label(m_top, text="🎯 THẺ QUẢN LÝ CHỌN VIDEO QÙA", style="PanelTitle.TLabel").pack(side="left")
+
+        btn_action_presets = tk.Button(m_top, text="⚡ Kho Hành Động", font=("Segoe UI", 9, "bold"), bg="#1e293b", fg=COLOR_CYAN, activebackground=COLOR_CYAN, activeforeground="#000", relief="flat", padx=6, pady=2, command=self.prompt_manage_action_presets)
+        btn_action_presets.pack(side="right", padx=(4, 0))
 
         btn_add = tk.Button(m_top, text="➕ Thêm Quà Mới", font=("Segoe UI", 9, "bold"), bg=COLOR_EMERALD, fg="#042f2e", activebackground="#34d399", relief="flat", padx=6, pady=2, command=self.prompt_add_new_gift)
         btn_add.pack(side="right", padx=(4, 0))
@@ -934,6 +1055,106 @@ class TikTokObsGui:
             card.on_delete = self.delete_gift_mapping
             card.pack(fill="x", pady=3)
             self.gift_cards[gift] = card
+
+    def prompt_manage_action_presets(self) -> None:
+        dlg = tk.Toplevel(self.root)
+        dlg.title("⚡ QUẢN LÝ KHO HÀNH ĐỘNG (ACTION PRESETS)")
+        dlg.geometry("620x520")
+        dlg.resizable(False, False)
+        dlg.configure(bg="#0f172a")
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        top_f = tk.Frame(dlg, bg="#0f172a", padx=16, pady=12)
+        top_f.pack(fill="x")
+        tk.Label(top_f, text="⚡ QUẢN LÝ KHO HÀNH ĐỘNG (ACTION PRESETS)", font=("Segoe UI", 12, "bold"), fg=COLOR_CYAN, bg="#0f172a").pack(side="left")
+
+        def _add_new_preset() -> None:
+            new_dlg = tk.Toplevel(dlg)
+            new_dlg.title("➕ Tạo Hành Động Mới")
+            new_dlg.geometry("450x200")
+            new_dlg.configure(bg="#0f172a")
+            new_dlg.transient(dlg)
+            new_dlg.grab_set()
+
+            tk.Label(new_dlg, text="Tên Hành Động Mới (Ví dụ: Nhảy Hot Trend 2026):", font=("Segoe UI", 9), fg=TEXT_MUTED, bg="#0f172a").pack(anchor="w", padx=16, pady=(16, 4))
+            name_ent = tk.Entry(new_dlg, bg="#182335", fg="#fff", insertbackground="#fff", font=("Segoe UI", 10))
+            name_ent.pack(fill="x", padx=16, ipady=4)
+            name_ent.focus_set()
+
+            def _save_new() -> None:
+                nname = name_ent.get().strip()
+                if not nname:
+                    messagebox.showwarning("Cảnh báo", "Vui lòng nhập tên Hành Động.", parent=new_dlg)
+                    return
+                aid = f"action_{len(core.ACTION_PRESETS)+1}_{nname.lower().replace(' ', '_')}"
+                core.ACTION_PRESETS[aid] = core.ActionPreset(id=aid, name=nname, videos=[])
+                core.save_action_presets(core.ACTION_PRESETS)
+                new_dlg.destroy()
+                _render_list()
+
+            tk.Button(new_dlg, text="✔ Tạo Ngay", font=("Segoe UI", 9, "bold"), bg=COLOR_EMERALD, fg="#042f2e", relief="flat", padx=10, pady=4, command=_save_new).pack(side="right", padx=16, pady=20)
+
+        tk.Button(top_f, text="➕ Tạo Hành Động Mới", font=("Segoe UI", 9, "bold"), bg=COLOR_EMERALD, fg="#042f2e", relief="flat", padx=8, pady=3, command=_add_new_preset).pack(side="right")
+
+        list_frame = tk.Frame(dlg, bg="#0d131f", padx=12, pady=10)
+        list_frame.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+
+        def _render_list() -> None:
+            for w in list_frame.winfo_children():
+                w.destroy()
+
+            for aid, preset in core.ACTION_PRESETS.items():
+                card = tk.Frame(list_frame, bg="#182335", highlightbackground="#334155", highlightthickness=1, padx=10, pady=8)
+                card.pack(fill="x", pady=4)
+
+                left = tk.Frame(card, bg="#182335")
+                left.pack(side="left", fill="x", expand=True)
+
+                tk.Label(left, text=preset.name, font=("Segoe UI", 10, "bold"), fg=COLOR_CYAN, bg="#182335", anchor="w").pack(anchor="w")
+                v_text = ", ".join([Path(v).name for v in preset.videos]) if preset.videos else "(Chưa có video nào)"
+                tk.Label(left, text=f"📹 Video ({len(preset.videos)} điệu): {shorten_filename(v_text, 36)}", font=("Segoe UI", 8), fg=TEXT_MUTED, bg="#182335", anchor="w").pack(anchor="w", pady=(2, 0))
+
+                right = tk.Frame(card, bg="#182335")
+                right.pack(side="right")
+
+                def _choose_vids(target_aid=aid) -> None:
+                    fns = filedialog.askopenfilenames(
+                        parent=dlg,
+                        title=f"Chọn video cho {core.ACTION_PRESETS[target_aid].name} (Giữ Ctrl để chọn nhiều file)",
+                        filetypes=[("Media Files", "*.mp4 *.mov *.mkv *.webm *.png *.jpg *.jpeg *.webp"), ("All files", "*.*")],
+                    )
+                    if fns:
+                        mapped_vals = []
+                        for filename in fns:
+                            path = Path(filename)
+                            core.VIDEO_DIRECTORY = path.parent
+                            mapped_val = path.name if path.parent == core.VIDEO_DIRECTORY else str(path)
+                            mapped_vals.append(mapped_val)
+                        core.ACTION_PRESETS[target_aid].videos = mapped_vals
+                        core.save_action_presets(core.ACTION_PRESETS)
+                        _render_list()
+
+                def _del_preset(target_aid=aid) -> None:
+                    if len(core.ACTION_PRESETS) <= 1:
+                        messagebox.showwarning("Cảnh báo", "Không thể xóa Hành động cuối cùng.", parent=dlg)
+                        return
+                    if messagebox.askyesno("Xóa Hành Động", f"Bạn có chắc muốn xóa {core.ACTION_PRESETS[target_aid].name}?", parent=dlg):
+                        del core.ACTION_PRESETS[target_aid]
+                        core.save_action_presets(core.ACTION_PRESETS)
+                        _render_list()
+
+                tk.Button(right, text="📂 Chọn Video", font=("Segoe UI", 8, "bold"), bg=COLOR_AMBER, fg="#000", relief="flat", padx=6, pady=2, command=_choose_vids).pack(side="left", padx=2)
+                tk.Button(right, text="🗑", font=("Segoe UI", 8, "bold"), bg="#334155", fg=COLOR_ROSE, relief="flat", padx=4, pady=2, command=_del_preset).pack(side="left", padx=2)
+
+        _render_list()
+
+        def _close_and_refresh() -> None:
+            self._refresh_cards_container()
+            self._refresh_stream_deck_grid()
+            dlg.destroy()
+
+        tk.Button(dlg, text="✔ ĐÃ XONG / ĐÓNG", font=("Segoe UI", 10, "bold"), bg=COLOR_EMERALD, fg="#042f2e", relief="flat", padx=12, pady=6, command=_close_and_refresh).pack(side="right", padx=16, pady=10)
 
     def prompt_add_new_gift(self) -> None:
         dlg = tk.Toplevel(self.root)
@@ -1096,8 +1317,16 @@ class TikTokObsGui:
                 sound_fn = mapped[2] if len(mapped) > 2 else ""
                 target_char = mapped[3] if len(mapped) > 3 else "char1"
                 sound_icon = " 🔊" if sound_fn else ""
-                char_tag = f" {CHAR_SHORT_TAGS.get(target_char, '[Chó 1]')}"
-                sub = f"Prio: {prio}{char_tag} | {shorten_filename(fn, 12)}{sound_icon}"
+                char_tag = f" {core.CHAR_SHORT_TAGS.get(target_char, '[NV 1]')}"
+                vids, sound_fn, action_name = core.resolve_gift_action_media(fn, sound_fn)
+                if len(vids) > 1:
+                    first_n = Path(vids[0]).name
+                    fn_display = f"{shorten_filename(first_n, 8)} (+{len(vids)-1} rnd)"
+                elif len(vids) == 1 and vids[0]:
+                    fn_display = shorten_filename(Path(vids[0]).name, 12)
+                else:
+                    fn_display = shorten_filename(action_name, 12)
+                sub = f"Prio: {prio}{char_tag} | {fn_display}{sound_icon}"
             else:
                 sub = "Priority: --"
 
@@ -1109,12 +1338,19 @@ class TikTokObsGui:
     def update_card_mapping(self, gift_key: str, filename: str, priority: int, sound_filename: str = "", target_char: str = "char1") -> None:
         core.GIFT_MAPPING[gift_key] = (filename, priority, sound_filename, target_char)
         core.save_gift_mapping(core.GIFT_MAPPING)
-        fn_name = Path(filename).name
+        vids, sound_filename, action_name = core.resolve_gift_action_media(filename, sound_filename)
+        if len(vids) > 1:
+            first_n = Path(vids[0]).name
+            fn_display = f"{shorten_filename(first_n, 8)} (+{len(vids)-1} rnd)"
+        elif len(vids) == 1 and vids[0]:
+            fn_display = shorten_filename(Path(vids[0]).name, 12)
+        else:
+            fn_display = shorten_filename(action_name, 12)
         sound_icon = " 🔊" if sound_filename else ""
-        char_tag = f" {CHAR_SHORT_TAGS.get(target_char, '[Chó 1]')}"
+        char_tag = f" {core.CHAR_SHORT_TAGS.get(target_char, '[NV 1]')}"
         if gift_key in self.deck_buttons:
-            self.deck_buttons[gift_key].set_subtitle(f"Prio: {priority}{char_tag} | {shorten_filename(fn_name, 12)}{sound_icon}")
-        logging.getLogger(__name__).info("Đã cập nhật quà %s: %s (Priority %s, Target: %s, Sound: %s)", gift_key.title(), fn_name, priority, get_char_display_name(target_char), sound_filename or "Không")
+            self.deck_buttons[gift_key].set_subtitle(f"Prio: {priority}{char_tag} | {fn_display}{sound_icon}")
+        logging.getLogger(__name__).info("Đã cập nhật quà %s: %s (Priority %s, Target: %s, Sound: %s)", gift_key.title(), fn_display, priority, get_char_display_name(target_char), sound_filename or "Không")
 
     def _build_log_console(self, parent: ttk.Frame) -> ttk.Frame:
         panel = ttk.Frame(parent, style="Panel.TFrame", padding=8)
@@ -1280,11 +1516,18 @@ class TikTokObsGui:
             sound_filename = card.sound_var.get().strip()
             target_char = card.get_target_char_value()
             core.GIFT_MAPPING[gift] = (filename, prio, sound_filename, target_char)
-            fn_name = Path(filename).name
+            vids, sound_filename, action_name = core.resolve_gift_action_media(filename, sound_filename)
+            if len(vids) > 1:
+                first_n = Path(vids[0]).name
+                fn_display = f"{shorten_filename(first_n, 8)} (+{len(vids)-1} rnd)"
+            elif len(vids) == 1 and vids[0]:
+                fn_display = shorten_filename(Path(vids[0]).name, 12)
+            else:
+                fn_display = shorten_filename(action_name, 12)
             sound_icon = " 🔊" if sound_filename else ""
-            char_tag = f" {CHAR_SHORT_TAGS.get(target_char, '[Chó 1]')}"
+            char_tag = f" {core.CHAR_SHORT_TAGS.get(target_char, '[NV 1]')}"
             if gift in self.deck_buttons:
-                self.deck_buttons[gift].set_subtitle(f"Prio: {prio}{char_tag} | {shorten_filename(fn_name, 12)}{sound_icon}")
+                self.deck_buttons[gift].set_subtitle(f"Prio: {prio}{char_tag} | {fn_display}{sound_icon}")
         core.save_gift_mapping(core.GIFT_MAPPING)
         logging.getLogger(__name__).info("Đã cập nhật toàn bộ Gift Mapping Cards Matrix")
 
@@ -1326,7 +1569,8 @@ class TikTokObsGui:
             if current_job:
                 emoji_map = {"rose": "🌹", "doughnut": "🍩", "tiktok": "♪", "lion": "🦁"}
                 emoji = emoji_map.get(current_job.gift_name, "🎬")
-                self.hero_emoji_lbl.configure(text=emoji)
+                if hasattr(self, "hero_emoji_lbl") and self.hero_emoji_lbl:
+                    self.hero_emoji_lbl.configure(text=emoji)
 
                 self.current_action_name.set(f"ĐANG PHÁT ACTION: {current_job.gift_name.upper()}")
                 self.current_action_sub.set(f"File: {current_job.file_path.name} | Priority Level: {current_job.priority}")
@@ -1337,13 +1581,16 @@ class TikTokObsGui:
                     rem = max(dur - elapsed, 0.0)
                     pct = min(100.0, (elapsed / dur) * 100.0)
 
-                    self.hero_progress.set_progress(pct)
+                    if hasattr(self, "hero_progress") and self.hero_progress:
+                        self.hero_progress.set_progress(pct)
                     self.timer_display.set(f"{rem:04.1f}s / {dur:04.1f}s")
             else:
-                self.hero_emoji_lbl.configure(text="💤")
+                if hasattr(self, "hero_emoji_lbl") and self.hero_emoji_lbl:
+                    self.hero_emoji_lbl.configure(text="💤")
                 self.current_action_name.set("💤 ĐANG CHẠY VIDEO CHỜ (IDLE LOOP)")
                 self.current_action_sub.set(f"Media Source: {core.IDLE_SOURCE_NAME} | File: {core.IDLE_VIDEO_PATH.name}")
-                self.hero_progress.set_progress(0.0)
+                if hasattr(self, "hero_progress") and self.hero_progress:
+                    self.hero_progress.set_progress(0.0)
                 self.timer_display.set("LOOPING")
 
             self._refresh_queue_tree(current_job, queue_items)
@@ -1352,7 +1599,8 @@ class TikTokObsGui:
             self.pill_obs.set_status("OFFLINE", "offline")
             self.pill_tiktok.set_status("OFFLINE", "offline")
             self.sys_status_pill.set_status("OFFLINE", "offline")
-            self.hero_progress.set_progress(0.0)
+            if hasattr(self, "hero_progress") and self.hero_progress:
+                self.hero_progress.set_progress(0.0)
             self.timer_display.set("00.0s / 00.0s")
             self.current_action_name.set("IDLE (Chờ kết nối)")
             self.current_action_sub.set("Media Source: Disconnected")
@@ -1361,6 +1609,15 @@ class TikTokObsGui:
         self.root.after(150, self._refresh_dashboard)
 
     def _refresh_queue_tree(self, active_job: core.GiftJob | None, queue_items: list[core.GiftJob]) -> None:
+        tree_sig = (
+            (active_job.gift_name, active_job.file_path.name) if active_job else None,
+            tuple((j.gift_name, j.file_path.name) for j in queue_items),
+            tuple((j.gift_name, j.file_path.name) for j in self.recent_history),
+        )
+        if getattr(self, "_last_tree_sig", None) == tree_sig:
+            return
+        self._last_tree_sig = tree_sig
+
         for item in self.queue_tree.get_children():
             self.queue_tree.delete(item)
 
@@ -1377,7 +1634,8 @@ class TikTokObsGui:
             self.queue_tree.insert("", "end", values=("✅ ĐÃ PHÁT", job.gift_name.title(), job.file_path.name, job.priority), tags=("done",))
 
     def _poll_logs(self) -> None:
-        while True:
+        count = 0
+        while count < 50:
             try:
                 message, tag = self.log_queue.get_nowait()
             except queue.Empty:
@@ -1385,7 +1643,14 @@ class TikTokObsGui:
             self.log_text.configure(state="normal")
             self.log_text.insert("end", message + "\n", tag)
             self.log_text.see("end")
+            try:
+                line_count = int(self.log_text.index("end-1c").split(".")[0])
+                if line_count > 300:
+                    self.log_text.delete("1.0", f"{line_count - 300}.0")
+            except Exception:
+                pass
             self.log_text.configure(state="disabled")
+            count += 1
         self.root.after(100, self._poll_logs)
 
     def close(self) -> None:

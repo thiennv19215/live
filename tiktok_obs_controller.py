@@ -27,6 +27,7 @@ import heapq
 import itertools
 import logging
 import os
+import random
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -101,6 +102,7 @@ IDLE_SOURCE_NAME = str(_saved_obs_cfg.get("idle_source_name", IDLE_SOURCE_NAME))
 ACTION_SOURCE_NAME = str(_saved_obs_cfg.get("action_source_name", ACTION_SOURCE_NAME))
 
 QUEUE_TEXT_SOURCE_NAME = "Queue_Text_Source"
+ENABLE_QUEUE_TEXT_SOURCE = False  # Đặt False nếu chỉ muốn OBS phát Video hiệu ứng khi có quà, không hiện Text Hàng chờ
 QUEUE_FILE_PATH = APP_DIRECTORY / "queue_status.txt"
 
 CHAR_SHORT_TAGS = {
@@ -112,16 +114,130 @@ CHAR_SHORT_TAGS = {
 }
 
 CONFIG_FILE = APP_DIRECTORY / "gift_config.json"
+ACTION_PRESETS_FILE = APP_DIRECTORY / "action_presets.json"
 
 AUDIO_SOURCE_NAME = "Audio_Action_Source"
 
-DEFAULT_GIFT_MAPPING: dict[str, tuple[str, int, str, str]] = {
-    "rose": ("cho_1_sui.png", 1, "", "char1"),
-    "doughnut": ("cho_2_trong_chuoi.png", 2, "", "char2"),
-    "perfume": ("cho_2_trong_chuoi.png", 2, "", "char2"),
-    "tiktok": ("3_cho_nhay_tiktok.mp4", 3, "", "char3"),
-    "lion": ("3_cho_bien_su_tu.mp4", 5, "", "all"),
+
+@dataclass
+class ActionPreset:
+    id: str
+    name: str
+    videos: list[str]
+    sound_filename: str = ""
+
+
+DEFAULT_ACTION_PRESETS: dict[str, dict[str, Any]] = {
+    "action_dance_rose": {
+        "name": "💃 Nhảy Rose Hot Trend",
+        "videos": ["cho_1_sui.png", "Dog_doing_funny_trick_dance_202608040341.mp4"],
+        "sound_filename": "",
+    },
+    "action_funny_doughnut": {
+        "name": "🍩 Ăn Mừng Vui Nhộn",
+        "videos": ["cho_2_trong_chuoi.png"],
+        "sound_filename": "",
+    },
+    "action_dance_tiktok": {
+        "name": "♪ Nhảy TikTok Sôi Động",
+        "videos": ["3_cho_nhay_tiktok.mp4"],
+        "sound_filename": "",
+    },
+    "action_lion_transform": {
+        "name": "🦁 Biến Hình Sư Tử",
+        "videos": ["3_cho_bien_su_tu.mp4"],
+        "sound_filename": "",
+    },
 }
+
+
+def parse_video_filenames(val: str | list[str] | Any) -> list[str]:
+    """Tach danh sach cac file video tu chuoi (phan cach boi dau phay) hoac list."""
+    if isinstance(val, list):
+        items = [str(x).strip() for x in val if str(x).strip()]
+        return items if items else [""]
+    if isinstance(val, str):
+        items = [x.strip() for x in val.split(",") if x.strip()]
+        return items if items else [""]
+    return [str(val).strip()]
+
+
+def select_random_video_filename(val: str | list[str] | Any) -> str:
+    """Chon ngau nhien 1 file video tu danh sach cac file media duoc gan cho qua."""
+    files = parse_video_filenames(val)
+    valid_files = [f for f in files if f]
+    return random.choice(valid_files) if valid_files else ""
+
+
+def load_action_presets() -> dict[str, ActionPreset]:
+    presets: dict[str, ActionPreset] = {}
+    data = DEFAULT_ACTION_PRESETS.copy()
+    if ACTION_PRESETS_FILE.is_file():
+        try:
+            with open(ACTION_PRESETS_FILE, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    data.update(loaded)
+        except Exception:
+            pass
+
+    for aid, val in data.items():
+        if isinstance(val, dict):
+            name = str(val.get("name", aid))
+            raw_vids = val.get("videos", [])
+            vids = parse_video_filenames(raw_vids)
+            sound_fn = str(val.get("sound_filename", ""))
+            presets[aid] = ActionPreset(id=aid, name=name, videos=vids, sound_filename=sound_fn)
+    return presets
+
+
+def save_action_presets(presets: dict[str, ActionPreset | dict[str, Any]]) -> None:
+    try:
+        data = {}
+        for aid, preset in presets.items():
+            if isinstance(preset, ActionPreset):
+                data[aid] = {
+                    "name": preset.name,
+                    "videos": preset.videos,
+                    "sound_filename": preset.sound_filename,
+                }
+            elif isinstance(preset, dict):
+                data[aid] = preset
+        with open(ACTION_PRESETS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+ACTION_PRESETS = load_action_presets()
+
+DEFAULT_GIFT_MAPPING: dict[str, tuple[str, int, str, str]] = {
+    "rose": ("action_dance_rose", 1, "", "char1"),
+    "doughnut": ("action_funny_doughnut", 2, "", "char2"),
+    "perfume": ("action_funny_doughnut", 2, "", "char2"),
+    "tiktok": ("action_dance_tiktok", 3, "", "char3"),
+    "lion": ("action_lion_transform", 5, "", "all"),
+}
+
+
+def resolve_gift_action_media(mapping_val: str, sound_mapped_val: str = "") -> tuple[list[str], str, str]:
+    """
+    Tra cuu tu mapping_val (co the la action_id hoac chuoi video).
+    Tra ve: (danh_sach_video_filenames, sound_filename, action_display_name).
+    """
+    mapping_key = str(mapping_val).strip()
+    if mapping_key in ACTION_PRESETS:
+        preset = ACTION_PRESETS[mapping_key]
+        sound = sound_mapped_val or preset.sound_filename
+        return preset.videos, sound, preset.name
+
+    for aid, preset in ACTION_PRESETS.items():
+        if aid.lower() == mapping_key.lower():
+            sound = sound_mapped_val or preset.sound_filename
+            return preset.videos, sound, preset.name
+
+    vids = parse_video_filenames(mapping_val)
+    return vids, sound_mapped_val, "Custom Video"
 
 
 def load_gift_mapping() -> dict[str, tuple[str, int, str, str]]:
@@ -132,7 +248,11 @@ def load_gift_mapping() -> dict[str, tuple[str, int, str, str]]:
                 res: dict[str, tuple[str, int, str, str]] = {}
                 for k, v in data.items():
                     gift_key = str(k).lower().strip()
-                    fn = str(v[0])
+                    raw_fn = v[0]
+                    if isinstance(raw_fn, list):
+                        fn = ", ".join(str(x).strip() for x in raw_fn if str(x).strip())
+                    else:
+                        fn = str(raw_fn).strip()
                     prio = int(v[1])
                     sound_fn = str(v[2]) if len(v) > 2 else ""
                     target_char = str(v[3]) if len(v) > 3 else "char1"
@@ -147,7 +267,7 @@ def save_gift_mapping(mapping: dict[str, Any]) -> None:
     try:
         data = {}
         for k, v in mapping.items():
-            fn = str(v[0])
+            fn = str(v[0]).strip()
             prio = int(v[1])
             sound_fn = str(v[2]) if len(v) > 2 else ""
             target_char = str(v[3]) if len(v) > 3 else "char1"
@@ -334,85 +454,66 @@ class ObsController:
                         SCENE_NAME = available_scenes[0]
                     LOGGER.info("Tu dong chon Scene dang mo trong OBS: '%s'", SCENE_NAME)
 
-                # 2. Dam bao tat ca Nguon Idle_Source_1..4 & Action_Source_1..4 ton tai trong OBS
-                input_list_resp = await asyncio.to_thread(self._client.get_input_list)
-                existing_inputs = [inp["inputName"] for inp in input_list_resp.inputs]
-
-                scene_items_resp = await asyncio.to_thread(self._client.get_scene_item_list, SCENE_NAME)
-                scene_item_names = [item["sourceName"] for item in scene_items_resp.scene_items]
-
-                # Danh sach tat ca Nguon can thiet cho multi-character va Text Hàng chờ
-                needed_sources: list[tuple[str, bool, str]] = [
-                    (IDLE_SOURCE_NAME, True, "ffmpeg_source"),
-                    (ACTION_SOURCE_NAME, False, "ffmpeg_source"),
-                    ("Action_Source_All", False, "ffmpeg_source"),
-                ]
-                for idx in range(1, 5):
-                    needed_sources.append((f"Idle_Source_{idx}", True, "ffmpeg_source"))
-                    needed_sources.append((f"Action_Source_{idx}", False, "ffmpeg_source"))
-
-                for src_name, default_enabled, kind in needed_sources:
-                    if src_name not in existing_inputs:
-                        LOGGER.info("Tu dong tao Nguon '%s' trong OBS Scene '%s'", src_name, SCENE_NAME)
-                        with contextlib.suppress(Exception):
-                            await asyncio.to_thread(
-                                self._client.create_input,
-                                sceneName=SCENE_NAME,
-                                inputName=src_name,
-                                inputKind=kind,
-                                inputSettings={},
-                                sceneItemEnabled=default_enabled,
-                            )
-                    if src_name not in scene_item_names:
-                        with contextlib.suppress(Exception):
-                            await asyncio.to_thread(
-                                self._client.create_scene_item,
-                                scene_name=SCENE_NAME,
-                                source_name=src_name,
-                                enabled=default_enabled,
-                            )
-
-                # Tu dong tao Nguon Text cho Hàng Chờ nếu chưa có
-                if QUEUE_TEXT_SOURCE_NAME not in existing_inputs:
-                    LOGGER.info("Tu dong tao Nguon Text '%s' trong OBS Scene '%s'", QUEUE_TEXT_SOURCE_NAME, SCENE_NAME)
-                    possible_text_kinds = ["text_gdiplus", "text_gdiplus_v2", "text_ft2_source", "text_ft2_source_v2"]
-                    for tkind in possible_text_kinds:
-                        try:
-                            await asyncio.to_thread(
-                                self._client.create_input,
-                                sceneName=SCENE_NAME,
-                                inputName=QUEUE_TEXT_SOURCE_NAME,
-                                inputKind=tkind,
-                                inputSettings={"text": "⏳ HÀNG CHỜ: Trống"},
-                                sceneItemEnabled=True,
-                            )
-                            LOGGER.info("Da tao thanh cong Nguon Text '%s' voi inputKind='%s'", QUEUE_TEXT_SOURCE_NAME, tkind)
-                            break
-                        except Exception:
-                            continue
-
-                # 3. Lay item id cho Action_Source va Idle_Source mac dinh
-                try:
-                    resp_action = await asyncio.to_thread(
-                        self._client.get_scene_item_id,
-                        SCENE_NAME,
-                        ACTION_SOURCE_NAME,
-                    )
-                    self._action_scene_item_id = resp_action.scene_item_id
-                except Exception as exc:
-                    LOGGER.warning("Khong tim thay SceneItemId cho %s: %s", ACTION_SOURCE_NAME, exc)
-
-                try:
-                    resp_idle = await asyncio.to_thread(
-                        self._client.get_scene_item_id,
-                        SCENE_NAME,
-                        IDLE_SOURCE_NAME,
-                    )
-                    self._idle_scene_item_id = resp_idle.scene_item_id
-                except Exception as exc:
-                    LOGGER.warning("Khong tim thay SceneItemId cho %s: %s", IDLE_SOURCE_NAME, exc)
+                # 2. Cập nhật cache và đảm bảo 2 Nguồn mặc định (Idle_Source & Action_Source) tồn tại trong OBS
+                await self.ensure_default_sources_exist()
             except Exception as exc:
                 LOGGER.warning("Auto-setup OBS Media Sources: %s", exc)
+
+    async def ensure_default_sources_exist(self) -> None:
+        if self.mock_mode or not self._client:
+            return
+        try:
+            await self._refresh_scene_items_cache()
+            existing = getattr(self, "existing_inputs", [])
+
+            needed = []
+            if IDLE_SOURCE_NAME not in existing:
+                needed.append((IDLE_SOURCE_NAME, True))
+            if ACTION_SOURCE_NAME not in existing:
+                needed.append((ACTION_SOURCE_NAME, False))
+
+            if not needed:
+                return
+
+            possible_kinds = ["ffmpeg_source", "vlc_source"]
+            for src_name, default_enabled in needed:
+                for kind in possible_kinds:
+                    try:
+                        await asyncio.to_thread(
+                            self._client.create_input,
+                            sceneName=SCENE_NAME,
+                            inputName=src_name,
+                            inputKind=kind,
+                            inputSettings={},
+                            sceneItemEnabled=default_enabled,
+                        )
+                        LOGGER.info("Tu dong tao Nguon chuẩn '%s' trong OBS Scene '%s'", src_name, SCENE_NAME)
+                        break
+                    except Exception:
+                        continue
+
+            await self._refresh_scene_items_cache()
+        except Exception as exc:
+            LOGGER.debug("ensure_default_sources_exist exception: %s", exc)
+
+    async def _refresh_scene_items_cache(self) -> dict[str, int]:
+        if self.mock_mode or not self._client:
+            return {}
+        try:
+            input_list_resp = await asyncio.to_thread(self._client.get_input_list)
+            self.existing_inputs = [inp["inputName"] for inp in input_list_resp.inputs]
+        except Exception:
+            self.existing_inputs = []
+
+        try:
+            resp = await asyncio.to_thread(self._client.get_scene_item_list, SCENE_NAME)
+            cache = {item["sourceName"]: item["sceneItemId"] for item in resp.scene_items}
+            self._scene_items_cache = cache
+            return cache
+        except Exception as exc:
+            LOGGER.debug("Khong thuc hien duoc get_scene_item_list: %s", exc)
+            self._scene_items_cache = {}
+            return {}
 
     async def close(self) -> None:
         async with self._lock:
@@ -423,6 +524,7 @@ class ObsController:
             self._client = None
             self._action_scene_item_id = None
             self._idle_scene_item_id = None
+            self._scene_items_cache = None
 
     async def _request(self, method_name: str, **kwargs: Any) -> Any:
         if self.mock_mode:
@@ -444,25 +546,25 @@ class ObsController:
     async def _get_scene_item_id(self, source_name: str) -> int | None:
         if self.mock_mode:
             return 1
-        try:
-            resp = await self._request("get_scene_item_id", scene_name=SCENE_NAME, source_name=source_name)
-            return getattr(resp, "scene_item_id", None)
-        except Exception as exc:
-            LOGGER.warning("Khong the lay SceneItemId cho '%s' trong Scene '%s': %s", source_name, SCENE_NAME, exc)
-            return None
+        if not hasattr(self, "_scene_items_cache") or self._scene_items_cache is None:
+            await self._refresh_scene_items_cache()
+        return self._scene_items_cache.get(source_name) if self._scene_items_cache else None
 
     def _get_sources_for_target(self, target_char: str = "char1") -> tuple[str, str]:
         target = str(target_char).lower().strip()
-        if target in ("char1", "1"):
-            return ("Idle_Source_1", "Action_Source_1")
-        elif target in ("char2", "2"):
-            return ("Idle_Source_2", "Action_Source_2")
-        elif target in ("char3", "3"):
-            return ("Idle_Source_3", "Action_Source_3")
-        elif target in ("char4", "4"):
-            return ("Idle_Source_4", "Action_Source_4")
+        idx_map = {"char1": "1", "1": "1", "char2": "2", "2": "2", "char3": "3", "3": "3", "char4": "4", "4": "4"}
+        inputs = getattr(self, "existing_inputs", [])
+        if target in idx_map:
+            idx = idx_map[target]
+            idle_candidate = f"Idle_Source_{idx}"
+            action_candidate = f"Action_Source_{idx}"
+            if self.mock_mode or not inputs or (idle_candidate in inputs or action_candidate in inputs):
+                return (idle_candidate, action_candidate)
+            return (IDLE_SOURCE_NAME, ACTION_SOURCE_NAME)
         elif target == "all":
-            return ("Action_Source_All", "Action_Source_All")
+            if self.mock_mode or not inputs or ("Action_Source_All" in inputs):
+                return ("Action_Source_All", "Action_Source_All")
+            return (ACTION_SOURCE_NAME, ACTION_SOURCE_NAME)
         return (IDLE_SOURCE_NAME, ACTION_SOURCE_NAME)
 
     async def _set_action_visible(self, visible: bool, target_char: str = "char1") -> None:
@@ -548,13 +650,23 @@ class ObsController:
                 await self._request("trigger_studio_mode_transition")
                 LOGGER.info("[OBS Studio Mode] Tu dong Transition tu Preview sang Program")
 
+    def _resolve_real_source_name(self, preferred_name: str, fallback_default: str) -> str:
+        inputs = getattr(self, "existing_inputs", [])
+        if not inputs or self.mock_mode:
+            return preferred_name or fallback_default
+        if preferred_name in inputs:
+            return preferred_name
+        if fallback_default in inputs:
+            return fallback_default
+        return inputs[0]
+
     async def play_action(self, video_path: Path, sound_path: Path | None = None, target_char: str = "char1") -> None:
         video_path = resolve_existing_media_path(video_path)
         if not self.mock_mode and not video_path.is_file():
             LOGGER.warning("Chua tim thay file video/anh: %s", video_path)
 
         idle_name, action_name = self._get_sources_for_target(target_char)
-        target_action_source = action_name if (await self._get_scene_item_id(action_name)) is not None else ACTION_SOURCE_NAME
+        target_action_source = self._resolve_real_source_name(action_name, ACTION_SOURCE_NAME)
 
         LOGGER.info("[OBS] Phat action video (%s): %s tren Nguon %s", target_char, video_path.name, target_action_source)
         if sound_path and sound_path.is_file():
@@ -563,41 +675,43 @@ class ObsController:
         if not self.mock_mode and video_path.is_file():
             clean_path = str(video_path.resolve()).replace("\\", "/")
             is_image = video_path.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".webp")
-            await self._request(
-                "set_input_settings",
-                name=target_action_source,
-                settings={
-                    "local_file": clean_path,
-                    "file": clean_path,
-                    "restart_on_activate": True,
-                    "is_local_file": True,
-                    "clear_on_media_end": False,
-                    "looping": is_image,
-                },
-                overlay=True,
-            )
+            with contextlib.suppress(Exception):
+                await self._request(
+                    "set_input_settings",
+                    name=target_action_source,
+                    settings={
+                        "local_file": clean_path,
+                        "file": clean_path,
+                        "restart_on_activate": True,
+                        "is_local_file": True,
+                        "clear_on_media_end": False,
+                        "looping": is_image,
+                    },
+                    overlay=True,
+                )
         await self._set_action_visible(True, target_char=target_char)
 
     async def set_idle_video(self, video_path: Path, target_char: str = "char1") -> None:
         video_path = resolve_existing_media_path(video_path)
         idle_name, _ = self._get_sources_for_target(target_char)
-        target_idle_source = idle_name if (await self._get_scene_item_id(idle_name)) is not None else IDLE_SOURCE_NAME
+        target_idle_source = self._resolve_real_source_name(idle_name, IDLE_SOURCE_NAME)
         LOGGER.info("[OBS] Cau hinh Video Cho (%s): %s tren Nguon %s", target_char, video_path.name, target_idle_source)
         if not self.mock_mode and video_path.is_file():
             clean_path = str(video_path.resolve()).replace("\\", "/")
             is_image = video_path.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".webp")
-            await self._request(
-                "set_input_settings",
-                name=target_idle_source,
-                settings={
-                    "local_file": clean_path,
-                    "file": clean_path,
-                    "is_local_file": True,
-                    "clear_on_media_end": False,
-                    "looping": True,
-                },
-                overlay=True,
-            )
+            with contextlib.suppress(Exception):
+                await self._request(
+                    "set_input_settings",
+                    name=target_idle_source,
+                    settings={
+                        "local_file": clean_path,
+                        "file": clean_path,
+                        "is_local_file": True,
+                        "clear_on_media_end": False,
+                        "looping": True,
+                    },
+                    overlay=True,
+                )
 
     async def stop_action(self, target_char: str = "char1") -> None:
         stop_sound_file()
@@ -630,7 +744,7 @@ class ObsController:
         except Exception:
             pass
 
-        if not self.mock_mode:
+        if ENABLE_QUEUE_TEXT_SOURCE and not self.mock_mode:
             with contextlib.suppress(Exception):
                 await self._request(
                     "set_input_settings",
@@ -707,10 +821,13 @@ class TikTokObsApp:
             LOGGER.info("Bo qua qua tang chua map: %s", gift_name or "(khong ten)")
             return
 
-        filename = mapping[0]
+        action_target = mapping[0]
         priority = int(mapping[1])
         sound_filename = mapping[2] if len(mapping) > 2 else ""
         target_char = str(mapping[3]) if len(mapping) > 3 else "char1"
+
+        video_files, resolved_sound_fn, action_name = resolve_gift_action_media(action_target, sound_filename)
+        filename = random.choice([v for v in video_files if v]) if video_files else ""
 
         p = Path(filename)
         video_path = p if p.is_absolute() else (VIDEO_DIRECTORY / filename)
@@ -720,16 +837,19 @@ class TikTokObsApp:
             LOGGER.warning("⚠️ CHÚ Ý: File media cho quà '%s' chưa tồn tại trên ổ đĩa: %s", gift_name, video_path)
 
         resolved_sound_path: Path | None = None
-        if sound_filename:
-            sp = Path(sound_filename)
-            sound_path = sp if sp.is_absolute() else (VIDEO_DIRECTORY / sound_filename)
+        if resolved_sound_fn:
+            sp = Path(resolved_sound_fn)
+            sound_path = sp if sp.is_absolute() else (VIDEO_DIRECTORY / resolved_sound_fn)
             resolved_sound_path = resolve_existing_sound_path(sound_path)
             if not resolved_sound_path.is_file():
                 LOGGER.warning("⚠️ CHÚ Ý: File âm thanh cho quà '%s' chưa tồn tại: %s", gift_name, sound_path)
 
         job = GiftJob(gift_name, resolved_path, priority, resolved_sound_path, target_char)
         await self.queue.put(job)
-        LOGGER.info("Them vao queue: %s -> %s (priority=%s, target=%s, sound=%s)", gift_name, resolved_path.name, priority, target_char, resolved_sound_path.name if resolved_sound_path else "None")
+        if len(video_files) > 1:
+            LOGGER.info("Them vao queue [%s - Random %d điệu]: %s -> %s (priority=%s, target=%s, sound=%s)", action_name, len(video_files), gift_name, resolved_path.name, priority, target_char, resolved_sound_path.name if resolved_sound_path else "None")
+        else:
+            LOGGER.info("Them vao queue [%s]: %s -> %s (priority=%s, target=%s, sound=%s)", action_name, gift_name, resolved_path.name, priority, target_char, resolved_sound_path.name if resolved_sound_path else "None")
         await self.update_queue_display()
 
     async def update_queue_display(self) -> None:

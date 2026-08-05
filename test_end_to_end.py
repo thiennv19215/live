@@ -59,6 +59,33 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(len(filename) > 0)
         self.assertEqual(priority, 1)
 
+    async def test_multi_video_random_selection(self) -> None:
+        """Kiểm tra tách danh sách nhiều video và bốc ngẫu nhiên khi gán cho quà."""
+        multi_str = "dance1.mp4, dance2.mp4, dance3.mp4"
+        files = core.parse_video_filenames(multi_str)
+        self.assertEqual(files, ["dance1.mp4", "dance2.mp4", "dance3.mp4"])
+
+        picked = core.select_random_video_filename(multi_str)
+        self.assertIn(picked, files)
+
+    async def test_action_preset_resolution(self) -> None:
+        """Kiểm tra tra cứu quà gán qua Kho Hành Động (Action Presets)."""
+        preset_id = "action_dance_rose"
+        self.assertIn(preset_id, core.ACTION_PRESETS)
+
+        preset = core.ACTION_PRESETS[preset_id]
+        vids, sound, name = core.resolve_gift_action_media(preset_id)
+        self.assertEqual(vids, preset.videos)
+        self.assertEqual(name, preset.name)
+
+        # Enqueue quà Rose gán với Action Preset
+        core.GIFT_MAPPING["rose_action_test"] = (preset_id, 1, "", "char1")
+        await self.app.enqueue_gift("rose_action_test")
+        self.assertEqual(len(self.app.queue), 1)
+
+        job = await self.app.queue.get()
+        self.assertIn(job.file_path.name, [Path(v).name for v in preset.videos])
+
     async def test_sound_file_execution(self) -> None:
         """Kiểm tra GiftJob hỗ trợ đường dẫn sound_path."""
         job = core.GiftJob("rose", Path("cho_1_sui.png"), priority=1, sound_path=Path("cho_sui.mp3"), target_char="char1")
