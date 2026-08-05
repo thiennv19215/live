@@ -55,9 +55,32 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         mapping = core.GIFT_MAPPING.get("rose")
         self.assertIsNotNone(mapping)
 
-        filename, priority = mapping
+        filename, priority, *rest = mapping
         self.assertTrue(len(filename) > 0)
         self.assertEqual(priority, 1)
+
+    async def test_sound_file_execution(self) -> None:
+        """Kiểm tra GiftJob hỗ trợ đường dẫn sound_path."""
+        job = core.GiftJob("rose", Path("cho_1_sui.png"), priority=1, sound_path=Path("cho_sui.mp3"), target_char="char1")
+        self.assertEqual(job.sound_path, Path("cho_sui.mp3"))
+        self.assertEqual(job.target_char, "char1")
+
+    async def test_multi_character_routing(self) -> None:
+        """Kiểm tra định tuyến Nguồn OBS theo Nhân vật (char1, char2, char3, all)."""
+        idle1, act1 = self.app.obs._get_sources_for_target("char1")
+        self.assertEqual((idle1, act1), ("Idle_Source_1", "Action_Source_1"))
+
+        idle2, act2 = self.app.obs._get_sources_for_target("char2")
+        self.assertEqual((idle2, act2), ("Idle_Source_2", "Action_Source_2"))
+
+        idle3, act3 = self.app.obs._get_sources_for_target("char3")
+        self.assertEqual((idle3, act3), ("Idle_Source_3", "Action_Source_3"))
+
+        idle4, act4 = self.app.obs._get_sources_for_target("char4")
+        self.assertEqual((idle4, act4), ("Idle_Source_4", "Action_Source_4"))
+
+        idle_all, act_all = self.app.obs._get_sources_for_target("all")
+        self.assertEqual((idle_all, act_all), ("Action_Source_All", "Action_Source_All"))
 
     async def test_idle_video_configuration(self) -> None:
         """Kiểm tra cấu hình Video Chờ (Idle Loop Video)."""

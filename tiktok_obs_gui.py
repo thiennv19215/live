@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import queue
@@ -43,6 +44,45 @@ def shorten_filename(filename: str, max_chars: int = 24) -> str:
         return name[: max_chars - 3] + "..."
     half = avail // 2
     return f"{stem[:half]}...{stem[-(avail - half):]}{ext}"
+
+
+CHAR_DISPLAY_MAP = {
+    "char1": "🎭 Nhân vật 1",
+    "char2": "🎭 Nhân vật 2",
+    "char3": "🎭 Nhân vật 3",
+    "char4": "🎭 Nhân vật 4",
+    "all": "🎉 Tất cả nhân vật",
+}
+
+CHAR_VALUE_MAP = {
+    "🎭 Nhân vật 1": "char1",
+    "🎭 Nhân vật 2": "char2",
+    "🎭 Nhân vật 3": "char3",
+    "🎭 Nhân vật 4": "char4",
+    "🎉 Tất cả nhân vật": "all",
+    "char1": "char1",
+    "char2": "char2",
+    "char3": "char3",
+    "char4": "char4",
+    "all": "all",
+}
+
+CHAR_SHORT_TAGS = {
+    "char1": "[NV 1]",
+    "char2": "[NV 2]",
+    "char3": "[NV 3]",
+    "char4": "[NV 4]",
+    "all": "[Tất cả]",
+}
+
+
+def get_char_display_name(key: str) -> str:
+    k = str(key).lower().strip()
+    return CHAR_DISPLAY_MAP.get(k, CHAR_DISPLAY_MAP["char1"])
+
+
+def get_char_value_from_display(display: str) -> str:
+    return CHAR_VALUE_MAP.get(display, "char1")
 
 
 class ColorLogHandler(logging.Handler):
@@ -147,7 +187,7 @@ class CanvasProgressBar(tk.Canvas):
 
 
 class GiftMappingCard(tk.Frame):
-    """Thẻ quản lý chọn file video & priority cho từng món quà."""
+    """Thẻ quản lý chọn file video, âm thanh, nhân vật & priority cho từng món quà."""
 
     def __init__(
         self,
@@ -155,8 +195,10 @@ class GiftMappingCard(tk.Frame):
         gift_key: str,
         video_filename: str,
         priority: int,
-        on_choose_file: callable,
-        on_test: callable,
+        sound_filename: str = "",
+        target_char: str = "char1",
+        on_choose_file: callable = None,
+        on_test: callable = None,
     ) -> None:
         super().__init__(parent, bg=CARD_BG, highlightbackground=PANEL_BORDER, highlightthickness=1, padx=10, pady=8)
         self.gift_key = gift_key
@@ -166,59 +208,171 @@ class GiftMappingCard(tk.Frame):
         emoji_map = {"rose": "🌹", "doughnut": "🍩", "perfume": "🧴", "tiktok": "♪", "lion": "🦁"}
         emoji = emoji_map.get(gift_key.lower(), "🎁")
 
-        self.columnconfigure(1, weight=1)
-
-        # Emoji Icon
-        lbl_icon = tk.Label(self, text=emoji, font=("Segoe UI Emoji", 16), bg=CARD_BG)
-        lbl_icon.grid(row=0, column=0, rowspan=2, padx=(0, 8), sticky="w")
-
-        # Gift Title
-        lbl_title = tk.Label(self, text=gift_key.title(), font=("Segoe UI", 10, "bold"), fg=COLOR_CYAN, bg=CARD_BG)
-        lbl_title.grid(row=0, column=1, sticky="w")
-
-        # Video File Name Display / Entry
         self.file_var = tk.StringVar(value=video_filename)
-        disp_name = shorten_filename(video_filename, 22)
-        self.lbl_file = tk.Label(self, text=disp_name, font=("Segoe UI", 8), fg=TEXT_MUTED, bg=CARD_BG, anchor="w")
-        self.lbl_file.grid(row=1, column=1, sticky="w")
-
-        # Priority Spinbox / Entry
-        prio_frame = tk.Frame(self, bg=CARD_BG)
-        prio_frame.grid(row=0, column=2, rowspan=2, padx=6)
-        tk.Label(prio_frame, text="Prio:", font=("Segoe UI", 8), fg=TEXT_MUTED, bg=CARD_BG).pack(side="left")
+        self.sound_var = tk.StringVar(value=sound_filename)
+        self.target_char_display_var = tk.StringVar(value=get_char_display_name(target_char))
         self.prio_var = tk.StringVar(value=str(priority))
-        spn = tk.Spinbox(prio_frame, from_=1, to=10, textvariable=self.prio_var, width=3, bg="#0d131f", fg="#fff", buttonbackground="#1e293b", relief="flat")
-        spn.pack(side="left", padx=2)
 
-        # Choose File Button
-        btn_choose = tk.Button(self, text="📂 Chọn Video", font=("Segoe UI", 8, "bold"), bg="#1e293b", fg=TEXT_MAIN, activebackground=COLOR_CYAN, activeforeground="#000", relief="flat", padx=6, pady=3, command=self._choose)
-        btn_choose.grid(row=0, column=3, rowspan=2, padx=4)
+        # --- ROW 0: Top Header (Emoji + Title + Target Combo + Prio Spinbox + Action Buttons) ---
+        row0 = tk.Frame(self, bg=CARD_BG)
+        row0.pack(fill="x", pady=(0, 6))
 
-        # Test Button
-        btn_test = tk.Button(self, text="▶ Test", font=("Segoe UI", 8, "bold"), bg=COLOR_EMERALD, fg="#042f2e", activebackground="#34d399", relief="flat", padx=6, pady=3, command=lambda: self.on_test(self.gift_key))
-        btn_test.grid(row=0, column=4, rowspan=2, padx=(0, 2))
+        lbl_icon = tk.Label(row0, text=emoji, font=("Segoe UI Emoji", 14), bg=CARD_BG)
+        lbl_icon.pack(side="left", padx=(0, 6))
 
-        # Delete Button
-        btn_del = tk.Button(self, text="🗑", font=("Segoe UI", 9, "bold"), bg="#334155", fg=COLOR_ROSE, activebackground=COLOR_ROSE, activeforeground="#fff", relief="flat", padx=4, pady=3, command=self._delete)
-        btn_del.grid(row=0, column=5, rowspan=2, padx=(2, 0))
+        lbl_title = tk.Label(row0, text=gift_key.title(), font=("Segoe UI", 10, "bold"), fg=COLOR_CYAN, bg=CARD_BG)
+        lbl_title.pack(side="left")
 
-        for widget in (self, lbl_icon, lbl_title, self.lbl_file):
-            widget.bind("<Enter>", lambda _: self.configure(bg=CARD_HOVER, highlightbackground=COLOR_CYAN))
-            widget.bind("<Leave>", lambda _: self.configure(bg=CARD_BG, highlightbackground=PANEL_BORDER))
+        # Delete & Test Buttons
+        btn_del = tk.Button(row0, text="🗑", font=("Segoe UI", 9, "bold"), bg="#334155", fg=COLOR_ROSE, activebackground=COLOR_ROSE, activeforeground="#fff", relief="flat", padx=5, pady=2, command=self._delete, cursor="hand2")
+        btn_del.pack(side="right", padx=(4, 0))
+
+        btn_test = tk.Button(row0, text="▶ Test", font=("Segoe UI", 8, "bold"), bg=COLOR_EMERALD, fg="#042f2e", activebackground="#34d399", relief="flat", padx=6, pady=2, command=lambda: self.on_test(self.gift_key), cursor="hand2")
+        btn_test.pack(side="right", padx=(4, 0))
+
+        # Priority Spinbox
+        prio_box = tk.Frame(row0, bg=CARD_BG)
+        prio_box.pack(side="right", padx=4)
+        tk.Label(prio_box, text="Ưu tiên:", font=("Segoe UI", 8), fg=TEXT_MUTED, bg=CARD_BG).pack(side="left", padx=(0, 2))
+        spn = tk.Spinbox(prio_box, from_=1, to=10, textvariable=self.prio_var, width=2, bg="#0d131f", fg="#fff", buttonbackground="#1e293b", relief="flat", command=self._notify_change)
+        spn.pack(side="left")
+
+        # Target Character Combobox
+        char_box = tk.Frame(row0, bg=CARD_BG)
+        char_box.pack(side="right", padx=4)
+        tk.Label(char_box, text="Nhân vật:", font=("Segoe UI", 8), fg=TEXT_MUTED, bg=CARD_BG).pack(side="left", padx=(0, 2))
+        cb_char = ttk.Combobox(char_box, values=list(CHAR_DISPLAY_MAP.values()), textvariable=self.target_char_display_var, width=13, state="readonly")
+        cb_char.pack(side="left")
+        cb_char.bind("<<ComboboxSelected>>", lambda _: self._notify_change())
+
+        # --- ROW 1: Media Chips (Clickable Video Button & Clickable Sound Button) ---
+        row1 = tk.Frame(self, bg=CARD_BG)
+        row1.pack(fill="x")
+
+        # Video Button Chip (Click trực tiếp để chọn Video!)
+        self.btn_video_chip = tk.Button(
+            row1,
+            text=self._format_video_label(),
+            font=("Segoe UI", 8, "bold"),
+            bg="#0d1527",
+            fg=COLOR_CYAN,
+            activebackground=COLOR_CYAN,
+            activeforeground="#000",
+            relief="groove",
+            borderwidth=1,
+            padx=6,
+            pady=3,
+            cursor="hand2",
+            command=self._choose_video,
+        )
+        self.btn_video_chip.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+        # Sound Button Chip (Click trực tiếp để chọn Âm Thanh!)
+        self.btn_sound_chip = tk.Button(
+            row1,
+            text=self._format_sound_label(),
+            font=("Segoe UI", 8, "bold"),
+            bg="#0d1527",
+            fg=COLOR_AMBER if sound_filename else TEXT_DARK,
+            activebackground=COLOR_AMBER,
+            activeforeground="#000",
+            relief="groove",
+            borderwidth=1,
+            padx=6,
+            pady=3,
+            cursor="hand2",
+            command=self._choose_sound,
+        )
+        self.btn_sound_chip.pack(side="left", fill="x", expand=True, padx=(0, 2))
+
+        # Clear Sound Button (✕)
+        self.btn_clear_sound = tk.Button(
+            row1,
+            text="✕",
+            font=("Segoe UI", 8, "bold"),
+            bg="#334155",
+            fg=COLOR_ROSE,
+            activebackground=COLOR_ROSE,
+            activeforeground="#fff",
+            relief="flat",
+            padx=4,
+            pady=2,
+            cursor="hand2",
+            command=self._clear_sound,
+        )
+        if sound_filename:
+            self.btn_clear_sound.pack(side="left")
+
+        for widget in (self, row0, row1, lbl_icon, lbl_title):
+            widget.bind("<Enter>", lambda _: self.configure(bg=CARD_HOVER))
+            widget.bind("<Leave>", lambda _: self.configure(bg=CARD_BG))
+
+    def _format_video_label(self) -> str:
+        val = self.file_var.get()
+        if val:
+            return f"🎥 Video: {shorten_filename(val, 16)}"
+        return "🎥 Click Chọn Video..."
+
+    def _format_sound_label(self) -> str:
+        val = self.sound_var.get()
+        if val:
+            return f"🎵 Tiếng: {shorten_filename(val, 14)}"
+        return "🎵 Click Chọn Âm Thanh (.mp3)..."
+
+    def _clear_sound(self) -> None:
+        self.sound_var.set("")
+        self.btn_sound_chip.configure(text=self._format_sound_label(), fg=TEXT_DARK)
+        self.btn_clear_sound.pack_forget()
+        self._notify_change()
 
     def _delete(self) -> None:
         if hasattr(self, "on_delete") and self.on_delete:
             self.on_delete(self.gift_key)
 
-    def _choose(self) -> None:
-        filename = filedialog.askopenfilename(title=f"Chọn video cho quà {self.gift_key.title()}", filetypes=[("Media Files", "*.mp4 *.mov *.mkv *.webm *.png *.jpg *.jpeg *.webp"), ("All files", "*.*")])
+    def get_target_char_value(self) -> str:
+        return get_char_value_from_display(self.target_char_display_var.get())
+
+    def _notify_change(self) -> None:
+        if self.on_choose_file:
+            self.on_choose_file(self.gift_key, self.file_var.get(), self.get_priority(), self.sound_var.get(), self.get_target_char_value())
+
+    def _choose_video(self) -> None:
+        top = self.winfo_toplevel()
+        filename = filedialog.askopenfilename(
+            parent=top,
+            title=f"Chọn video cho quà {self.gift_key.title()}",
+            filetypes=[("Media Files", "*.mp4 *.mov *.mkv *.webm *.png *.jpg *.jpeg *.webp"), ("All files", "*.*")],
+        )
         if filename:
             path = Path(filename)
             core.VIDEO_DIRECTORY = path.parent
             mapped_val = path.name if path.parent == core.VIDEO_DIRECTORY else str(path)
             self.file_var.set(mapped_val)
-            self.lbl_file.configure(text=shorten_filename(path.name, 22))
-            self.on_choose_file(self.gift_key, mapped_val, self.get_priority())
+            self.btn_video_chip.configure(text=self._format_video_label(), fg=COLOR_CYAN)
+            self._notify_change()
+        with contextlib.suppress(Exception):
+            top.lift()
+            top.focus_force()
+
+    def _choose_sound(self) -> None:
+        top = self.winfo_toplevel()
+        filename = filedialog.askopenfilename(
+            parent=top,
+            title=f"Chọn file âm thanh (.mp3, .wav) cho quà {self.gift_key.title()}",
+            filetypes=[("Audio Files", "*.mp3 *.wav *.aac *.m4a *.ogg *.flac *.wma"), ("All files", "*.*")],
+        )
+        if filename:
+            path = Path(filename)
+            core.VIDEO_DIRECTORY = path.parent
+            mapped_val = path.name if path.parent == core.VIDEO_DIRECTORY else str(path)
+            self.sound_var.set(mapped_val)
+            self.btn_sound_chip.configure(text=self._format_sound_label(), fg=COLOR_AMBER)
+            if not self.btn_clear_sound.winfo_manager():
+                self.btn_clear_sound.pack(side="left")
+            self._notify_change()
+        with contextlib.suppress(Exception):
+            top.lift()
+            top.focus_force()
 
     def get_priority(self) -> int:
         try:
@@ -299,7 +453,10 @@ class TikTokObsGui:
         self.scene_name = tk.StringVar(value=core.SCENE_NAME)
         self.idle_source = tk.StringVar(value=core.IDLE_SOURCE_NAME)
         self.action_source = tk.StringVar(value=core.ACTION_SOURCE_NAME)
-        self.idle_video_name = tk.StringVar(value=shorten_filename(core.resolve_existing_media_path(core.IDLE_VIDEO_PATH).name, 22))
+        self.idle_video_1_name = tk.StringVar(value=shorten_filename(core.resolve_existing_media_path(core.IDLE_VIDEO_PATH_1).name, 16))
+        self.idle_video_2_name = tk.StringVar(value=shorten_filename(core.resolve_existing_media_path(core.IDLE_VIDEO_PATH_2).name, 16))
+        self.idle_video_3_name = tk.StringVar(value=shorten_filename(core.resolve_existing_media_path(core.IDLE_VIDEO_PATH_3).name, 16))
+        self.idle_video_4_name = tk.StringVar(value=shorten_filename(core.resolve_existing_media_path(core.IDLE_VIDEO_PATH_4).name, 16))
 
         # Mặc định False để kết nối OBS thật khi bấm nút
         self.mock_mode_var = tk.BooleanVar(value=False)
@@ -460,18 +617,18 @@ class TikTokObsGui:
         ttk.Label(u_box, text="TikTok Username (Host Live):", style="PanelMuted.TLabel").pack(anchor="w", pady=(0, 2))
         ttk.Entry(u_box, textvariable=self.username).pack(fill="x")
 
-        # IDLE VIDEO SELECTION CARD
-        idle_box = tk.Frame(panel, bg=CARD_BG, highlightbackground=COLOR_CYAN, highlightthickness=1, padx=8, pady=5)
+        # IDLE VIDEO SELECTION CARD (SINGLE MAIN BACKGROUND)
+        idle_box = tk.Frame(panel, bg=CARD_BG, highlightbackground=COLOR_CYAN, highlightthickness=1, padx=10, pady=8)
         idle_box.pack(fill="x", pady=(0, 8))
 
-        tk.Label(idle_box, text="💤 VIDEO CHỜ (IDLE LOOP)", font=("Segoe UI", 8, "bold"), fg=COLOR_CYAN, bg=CARD_BG).pack(anchor="w")
+        tk.Label(idle_box, text="💤 VIDEO CHỜ NỀN LIVESTREAM (IDLE LOOP)", font=("Segoe UI", 9, "bold"), fg=COLOR_CYAN, bg=CARD_BG).pack(anchor="w", pady=(0, 4))
 
-        idle_row = tk.Frame(idle_box, bg=CARD_BG)
-        idle_row.pack(fill="x", pady=(2, 0))
+        idle_main_row = tk.Frame(idle_box, bg=CARD_BG)
+        idle_main_row.pack(fill="x", pady=2)
+        tk.Label(idle_main_row, textvariable=self.idle_video_1_name, font=("Segoe UI", 9, "bold"), fg=COLOR_EMERALD, bg="#0d131f", padx=6, pady=4, anchor="w").pack(side="left", fill="x", expand=True, padx=(0, 6))
 
-        tk.Label(idle_row, textvariable=self.idle_video_name, font=("Segoe UI", 8, "bold"), fg=TEXT_MAIN, bg="#0d131f", padx=5, pady=2, anchor="w").pack(side="left", fill="x", expand=True)
-        btn_pick_idle = tk.Button(idle_row, text="📂 Chọn", font=("Segoe UI", 8, "bold"), bg=COLOR_AMBER, fg="#000", relief="flat", padx=5, pady=2, command=self.choose_idle_video)
-        btn_pick_idle.pack(side="right", padx=(4, 0))
+        btn_pick_main = tk.Button(idle_main_row, text="📂 Chọn Video Nền", font=("Segoe UI", 9, "bold"), bg=COLOR_CYAN, fg="#083344", activebackground="#38bdf8", relief="flat", padx=8, pady=3, command=lambda: self.choose_idle_video("main"), cursor="hand2")
+        btn_pick_main.pack(side="right")
 
         # Dedicated OBS Settings & Open Folder Buttons
         btn_obs_cfg = tk.Button(panel, text="⚙ Cài Đặt Kết Nối OBS Studio", font=("Segoe UI", 9, "bold"), bg="#1e293b", fg=COLOR_CYAN, activebackground=COLOR_CYAN, activeforeground="#000", relief="flat", padx=6, pady=5, command=self.open_obs_settings_dialog)
@@ -553,16 +710,51 @@ class TikTokObsGui:
         tk.Button(btn_box, text="✔ LƯU CẤU HÌNH OBS", font=("Segoe UI", 10, "bold"), bg=COLOR_EMERALD, fg="#042f2e", relief="flat", padx=12, pady=6, command=_save_obs).pack(side="right")
         tk.Button(btn_box, text="Hủy", font=("Segoe UI", 9), bg="#334155", fg="#fff", relief="flat", padx=10, pady=6, command=dlg.destroy).pack(side="right", padx=(0, 6))
 
-    def choose_idle_video(self) -> None:
-        filename = filedialog.askopenfilename(title="Chọn Video Chờ (Idle Loop Video)", filetypes=[("Media Files", "*.mp4 *.mov *.mkv *.webm *.png *.jpg *.jpeg *.webp"), ("All files", "*.*")])
+    def choose_idle_video(self, target_char: str = "char1") -> None:
+        char_label = "Nền Chung" if target_char == "main" else get_char_display_name(target_char)
+        filename = filedialog.askopenfilename(
+            parent=self.root,
+            title=f"Chọn Video Chờ (Idle Loop) cho {char_label}",
+            filetypes=[("Media Files", "*.mp4 *.mov *.mkv *.webm *.png *.jpg *.jpeg *.webp"), ("All files", "*.*")],
+        )
         if filename:
             path = Path(filename)
-            core.IDLE_VIDEO_PATH = path
             core.VIDEO_DIRECTORY = path.parent
-            self.idle_video_name.set(shorten_filename(path.name, 22))
-            logging.getLogger(__name__).info("Đã chọn Video Chờ mới: %s", path.name)
+            if target_char == "main":
+                core.IDLE_VIDEO_PATH = path
+                core.IDLE_VIDEO_PATH_1 = path
+                core.IDLE_VIDEO_PATH_2 = path
+                core.IDLE_VIDEO_PATH_3 = path
+                core.IDLE_VIDEO_PATH_4 = path
+                short_n = shorten_filename(path.name, 16)
+                self.idle_video_1_name.set(short_n)
+                self.idle_video_2_name.set(short_n)
+                self.idle_video_3_name.set(short_n)
+                self.idle_video_4_name.set(short_n)
+            elif target_char == "char2":
+                core.IDLE_VIDEO_PATH_2 = path
+                self.idle_video_2_name.set(shorten_filename(path.name, 16))
+            elif target_char == "char3":
+                core.IDLE_VIDEO_PATH_3 = path
+                self.idle_video_3_name.set(shorten_filename(path.name, 16))
+            elif target_char == "char4":
+                core.IDLE_VIDEO_PATH_4 = path
+                self.idle_video_4_name.set(shorten_filename(path.name, 16))
+            else:
+                core.IDLE_VIDEO_PATH_1 = path
+                core.IDLE_VIDEO_PATH = path
+                self.idle_video_1_name.set(shorten_filename(path.name, 16))
+
+            logging.getLogger(__name__).info("Đã chọn Video Chờ mới cho %s: %s", char_label, path.name)
             if self.app and self.run_loop:
-                asyncio.run_coroutine_threadsafe(self.app.obs.set_idle_video(path), self.run_loop)
+                if target_char == "main":
+                    for c in ("char1", "char2", "char3", "char4", "main"):
+                        asyncio.run_coroutine_threadsafe(self.app.obs.set_idle_video(path, c), self.run_loop)
+                else:
+                    asyncio.run_coroutine_threadsafe(self.app.obs.set_idle_video(path, target_char), self.run_loop)
+        with contextlib.suppress(Exception):
+            self.root.lift()
+            self.root.focus_force()
 
     def _build_hero_player(self, parent: ttk.Frame) -> tk.Frame:
         card = tk.Frame(parent, bg=CARD_BG, highlightbackground=COLOR_CYAN, highlightthickness=1, padx=14, pady=12)
@@ -643,8 +835,11 @@ class TikTokObsGui:
         for col, (emoji, title, color, gift_key) in enumerate(buttons_data):
             mapped = core.GIFT_MAPPING.get(gift_key)
             if mapped:
-                fn, prio = mapped
-                sub = f"Priority: {prio} | {Path(fn).name}"
+                fn = mapped[0]
+                prio = mapped[1]
+                sound_fn = mapped[2] if len(mapped) > 2 else ""
+                sound_icon = " 🔊" if sound_fn else ""
+                sub = f"Prio: {prio} | {shorten_filename(fn, 14)}{sound_icon}"
             else:
                 sub = "Priority: --"
 
@@ -705,8 +900,9 @@ class TikTokObsGui:
         scroll_map = ttk.Scrollbar(map_panel, orient="vertical", command=canvas_map.yview)
         self.cards_container = tk.Frame(canvas_map, bg=PANEL_BG)
 
+        cards_win_id = canvas_map.create_window((0, 0), window=self.cards_container, anchor="nw")
         self.cards_container.bind("<Configure>", lambda e: canvas_map.configure(scrollregion=canvas_map.bbox("all")))
-        canvas_map.create_window((0, 0), window=self.cards_container, anchor="nw")
+        canvas_map.bind("<Configure>", lambda e: canvas_map.itemconfig(cards_win_id, width=e.width))
         canvas_map.configure(yscrollcommand=scroll_map.set)
 
         canvas_map.pack(side="left", fill="both", expand=True)
@@ -720,12 +916,18 @@ class TikTokObsGui:
             widget.destroy()
         self.gift_cards.clear()
 
-        for gift, (filename, priority) in core.GIFT_MAPPING.items():
+        for gift, mapped in core.GIFT_MAPPING.items():
+            filename = mapped[0]
+            priority = mapped[1]
+            sound_filename = mapped[2] if len(mapped) > 2 else ""
+            target_char = mapped[3] if len(mapped) > 3 else "char1"
             card = GiftMappingCard(
                 self.cards_container,
                 gift_key=gift,
                 video_filename=filename,
                 priority=priority,
+                sound_filename=sound_filename,
+                target_char=target_char,
                 on_choose_file=self.update_card_mapping,
                 on_test=self.test_gift,
             )
@@ -736,7 +938,7 @@ class TikTokObsGui:
     def prompt_add_new_gift(self) -> None:
         dlg = tk.Toplevel(self.root)
         dlg.title("➕ Thêm Món Quà Mới")
-        dlg.geometry("460x280")
+        dlg.geometry("460x390")
         dlg.resizable(False, False)
         dlg.configure(bg="#0f172a")
         dlg.transient(self.root)
@@ -753,15 +955,24 @@ class TikTokObsGui:
         gift_entry.focus_set()
 
         prio_frame = tk.Frame(form, bg="#0f172a")
-        prio_frame.pack(fill="x", pady=(10, 4))
+        prio_frame.pack(fill="x", pady=(8, 4))
         tk.Label(prio_frame, text="Cấp độ ưu tiên (Priority 1-10):", font=("Segoe UI", 9), fg=TEXT_MUTED, bg="#0f172a").pack(side="left")
         prio_var = tk.StringVar(value="1")
         spn_prio = tk.Spinbox(prio_frame, from_=1, to=10, textvariable=prio_var, width=4, bg="#182335", fg="#fff", buttonbackground="#1e293b", relief="flat")
         spn_prio.pack(side="left", padx=8)
 
+        # Target Character Selector
+        char_sel_frame = tk.Frame(form, bg="#0f172a")
+        char_sel_frame.pack(fill="x", pady=(6, 0))
+        tk.Label(char_sel_frame, text="Áp dụng cho Nhân vật:", font=("Segoe UI", 9), fg=TEXT_MUTED, bg="#0f172a").pack(side="left")
+        target_char_display_var = tk.StringVar(value=get_char_display_name("char1"))
+        cb_target_char = ttk.Combobox(char_sel_frame, values=list(CHAR_DISPLAY_MAP.values()), textvariable=target_char_display_var, width=18, state="readonly")
+        cb_target_char.pack(side="left", padx=8)
+
+        # File Media
         file_path_var = tk.StringVar(value="")
         file_frame = tk.Frame(form, bg="#0f172a")
-        file_frame.pack(fill="x", pady=(8, 0))
+        file_frame.pack(fill="x", pady=(6, 0))
         tk.Label(file_frame, text="File Media (Video/Ảnh):", font=("Segoe UI", 9), fg=TEXT_MUTED, bg="#0f172a").pack(anchor="w", pady=(0, 2))
 
         file_row = tk.Frame(file_frame, bg="#0f172a")
@@ -769,12 +980,44 @@ class TikTokObsGui:
         lbl_file_path = tk.Label(file_row, textvariable=file_path_var, font=("Segoe UI", 8), fg=COLOR_CYAN, bg="#182335", anchor="w", padx=6, pady=4)
         lbl_file_path.pack(side="left", fill="x", expand=True)
 
-        def _browse() -> None:
-            fn = filedialog.askopenfilename(title="Chọn Video / Ảnh cho quà", filetypes=[("Media Files", "*.mp4 *.mov *.mkv *.webm *.png *.jpg *.jpeg *.webp"), ("All files", "*.*")])
+        def _browse_video() -> None:
+            fn = filedialog.askopenfilename(
+                parent=dlg,
+                title="Chọn Video / Ảnh cho quà",
+                filetypes=[("Media Files", "*.mp4 *.mov *.mkv *.webm *.png *.jpg *.jpeg *.webp"), ("All files", "*.*")],
+            )
             if fn:
                 file_path_var.set(fn)
+            with contextlib.suppress(Exception):
+                dlg.lift()
+                dlg.focus_force()
 
-        tk.Button(file_row, text="📂 Chọn", font=("Segoe UI", 8, "bold"), bg=COLOR_AMBER, fg="#000", relief="flat", padx=6, pady=3, command=_browse).pack(side="right", padx=(4, 0))
+        tk.Button(file_row, text="📂 Chọn Video", font=("Segoe UI", 8, "bold"), bg=COLOR_AMBER, fg="#000", relief="flat", padx=6, pady=3, command=_browse_video).pack(side="right", padx=(4, 0))
+
+        # File Sound
+        sound_path_var = tk.StringVar(value="")
+        sound_frame = tk.Frame(form, bg="#0f172a")
+        sound_frame.pack(fill="x", pady=(6, 0))
+        tk.Label(sound_frame, text="File Âm thanh đi kèm (Tùy chọn .mp3, .wav):", font=("Segoe UI", 9), fg=TEXT_MUTED, bg="#0f172a").pack(anchor="w", pady=(0, 2))
+
+        sound_row = tk.Frame(sound_frame, bg="#0f172a")
+        sound_row.pack(fill="x")
+        lbl_sound_path = tk.Label(sound_row, textvariable=sound_path_var, font=("Segoe UI", 8), fg=COLOR_AMBER, bg="#182335", anchor="w", padx=6, pady=4)
+        lbl_sound_path.pack(side="left", fill="x", expand=True)
+
+        def _browse_sound() -> None:
+            fn = filedialog.askopenfilename(
+                parent=dlg,
+                title="Chọn tệp âm thanh cho quà",
+                filetypes=[("Audio Files", "*.mp3 *.wav *.aac *.m4a *.ogg *.flac *.wma"), ("All files", "*.*")],
+            )
+            if fn:
+                sound_path_var.set(fn)
+            with contextlib.suppress(Exception):
+                dlg.lift()
+                dlg.focus_force()
+
+        tk.Button(sound_row, text="🎵 Chọn Tiếng", font=("Segoe UI", 8, "bold"), bg="#1e293b", fg=COLOR_AMBER, relief="flat", padx=6, pady=3, command=_browse_sound).pack(side="right", padx=(4, 0))
 
         btn_box = tk.Frame(dlg, bg="#0f172a", padx=16, pady=16)
         btn_box.pack(fill="x", side="bottom")
@@ -797,12 +1040,20 @@ class TikTokObsGui:
             core.VIDEO_DIRECTORY = path.parent
             mapped_val = path.name if path.parent == core.VIDEO_DIRECTORY else str(path)
 
-            core.GIFT_MAPPING[key] = (mapped_val, prio)
+            s_fn = sound_path_var.get().strip()
+            sound_mapped_val = ""
+            if s_fn:
+                spath = Path(s_fn)
+                sound_mapped_val = spath.name if spath.parent == core.VIDEO_DIRECTORY else str(spath)
+
+            target_char = get_char_value_from_display(target_char_display_var.get())
+
+            core.GIFT_MAPPING[key] = (mapped_val, prio, sound_mapped_val, target_char)
             core.save_gift_mapping(core.GIFT_MAPPING)
 
             self._refresh_cards_container()
             self._refresh_stream_deck_grid()
-            logging.getLogger(__name__).info("➕ Đã thêm món quà mới: '%s' -> %s (Priority %s)", key.title(), path.name, prio)
+            logging.getLogger(__name__).info("➕ Đã thêm món quà mới: '%s' -> %s (Priority %s, Target: %s, Sound: %s)", key.title(), path.name, prio, get_char_display_name(target_char), sound_mapped_val or "Không")
             dlg.destroy()
 
         tk.Button(btn_box, text="✔ XÁC NHẬN THÊM", font=("Segoe UI", 10, "bold"), bg=COLOR_EMERALD, fg="#042f2e", relief="flat", padx=12, pady=6, command=_confirm).pack(side="right")
@@ -826,10 +1077,10 @@ class TikTokObsGui:
         self.deck_buttons.clear()
 
         buttons_data = [
-            ("🌹", "Rose (Hoa Hồng)", COLOR_ROSE, "rose"),
-            ("🍩", "Doughnut (Bánh)", COLOR_AMBER, "doughnut"),
-            ("♪", "TikTok", COLOR_CYAN, "tiktok"),
-            ("🦁", "Lion (Sư Tử - Ngắt)", COLOR_PURPLE, "lion"),
+            ("🌹", "Rose (Hoa Hồng - NV 1)", COLOR_ROSE, "rose"),
+            ("🍩", "Doughnut (Bánh - NV 2)", COLOR_AMBER, "doughnut"),
+            ("♪", "TikTok (Nhảy - NV 3)", COLOR_CYAN, "tiktok"),
+            ("🦁", "Lion (Sư Tử - Tất Cả)", COLOR_PURPLE, "lion"),
         ]
         for gift in core.GIFT_MAPPING.keys():
             if gift not in [b[3] for b in buttons_data]:
@@ -840,8 +1091,13 @@ class TikTokObsGui:
         for col, (emoji, title, color, gift_key) in enumerate(buttons_data):
             mapped = core.GIFT_MAPPING.get(gift_key)
             if mapped:
-                fn, prio = mapped
-                sub = f"Priority: {prio} | {shorten_filename(fn, 18)}"
+                fn = mapped[0]
+                prio = mapped[1]
+                sound_fn = mapped[2] if len(mapped) > 2 else ""
+                target_char = mapped[3] if len(mapped) > 3 else "char1"
+                sound_icon = " 🔊" if sound_fn else ""
+                char_tag = f" {CHAR_SHORT_TAGS.get(target_char, '[Chó 1]')}"
+                sub = f"Prio: {prio}{char_tag} | {shorten_filename(fn, 12)}{sound_icon}"
             else:
                 sub = "Priority: --"
 
@@ -850,13 +1106,15 @@ class TikTokObsGui:
             self.deck_grid.columnconfigure(col, weight=1)
             self.deck_buttons[gift_key] = btn
 
-    def update_card_mapping(self, gift_key: str, filename: str, priority: int) -> None:
-        core.GIFT_MAPPING[gift_key] = (filename, priority)
+    def update_card_mapping(self, gift_key: str, filename: str, priority: int, sound_filename: str = "", target_char: str = "char1") -> None:
+        core.GIFT_MAPPING[gift_key] = (filename, priority, sound_filename, target_char)
         core.save_gift_mapping(core.GIFT_MAPPING)
         fn_name = Path(filename).name
+        sound_icon = " 🔊" if sound_filename else ""
+        char_tag = f" {CHAR_SHORT_TAGS.get(target_char, '[Chó 1]')}"
         if gift_key in self.deck_buttons:
-            self.deck_buttons[gift_key].set_subtitle(f"Priority: {priority} | {shorten_filename(fn_name, 18)}")
-        logging.getLogger(__name__).info("Đã cập nhật video cho quà %s: %s (Priority %s)", gift_key.title(), fn_name, priority)
+            self.deck_buttons[gift_key].set_subtitle(f"Prio: {priority}{char_tag} | {shorten_filename(fn_name, 12)}{sound_icon}")
+        logging.getLogger(__name__).info("Đã cập nhật quà %s: %s (Priority %s, Target: %s, Sound: %s)", gift_key.title(), fn_name, priority, get_char_display_name(target_char), sound_filename or "Không")
 
     def _build_log_console(self, parent: ttk.Frame) -> ttk.Frame:
         panel = ttk.Frame(parent, style="Panel.TFrame", padding=8)
@@ -1019,10 +1277,14 @@ class TikTokObsGui:
         for gift, card in self.gift_cards.items():
             filename = card.file_var.get().strip()
             prio = card.get_priority()
-            core.GIFT_MAPPING[gift] = (filename, prio)
+            sound_filename = card.sound_var.get().strip()
+            target_char = card.get_target_char_value()
+            core.GIFT_MAPPING[gift] = (filename, prio, sound_filename, target_char)
             fn_name = Path(filename).name
+            sound_icon = " 🔊" if sound_filename else ""
+            char_tag = f" {CHAR_SHORT_TAGS.get(target_char, '[Chó 1]')}"
             if gift in self.deck_buttons:
-                self.deck_buttons[gift].set_subtitle(f"Priority: {prio} | {fn_name}")
+                self.deck_buttons[gift].set_subtitle(f"Prio: {prio}{char_tag} | {shorten_filename(fn_name, 12)}{sound_icon}")
         core.save_gift_mapping(core.GIFT_MAPPING)
         logging.getLogger(__name__).info("Đã cập nhật toàn bộ Gift Mapping Cards Matrix")
 

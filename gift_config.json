@@ -1,22 +1,32 @@
 {
   "rose": [
     "Dog_doing_funny_trick_dance_202608040341.mp4",
-    1
+    1,
+    "",
+    "char1"
   ],
   "doughnut": [
     "cho_2_trong_chuoi.png",
-    2
+    2,
+    "",
+    "all"
   ],
   "perfume": [
     "cho_2_trong_chuoi.png",
-    2
+    2,
+    "",
+    "char1"
   ],
   "tiktok": [
     "3_cho_nhay_tiktok.mp4",
-    3
+    3,
+    "",
+    "char1"
   ],
   "lion": [
     "3_cho_bien_su_tu.mp4",
-    5
+    5,
+    "",
+    "char1"
   ]
 }

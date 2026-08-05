@@ -6,3 +6,5 @@ dist/
 *.egg-info/
 .idea/
 .vscode/
+queue_status.txt
+obs_config.json
