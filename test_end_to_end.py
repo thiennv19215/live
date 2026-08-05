@@ -10,7 +10,12 @@ import tiktok_obs_controller as core
 
 class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
+        self._original_character_count = core.CHARACTER_COUNT
+        core.set_character_count(4)
         self.app = core.TikTokObsApp(mock_mode=True)
+
+    async def asyncTearDown(self) -> None:
+        core.set_character_count(self._original_character_count)
 
     async def test_fifo_queue_ordering(self) -> None:
         """Kiểm tra quà đến trước được phát trước, không phụ thuộc priority."""
@@ -89,6 +94,14 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         job = await self.app.queue.get()
         self.assertIn(job.file_path.name, [Path(v).name for v in preset.videos])
 
+    async def test_action_preset_can_be_previewed_for_selected_character(self) -> None:
+        preset_id = next(iter(core.ACTION_PRESETS))
+        with patch.object(core, "resolve_existing_media_path", return_value=Path(__file__)):
+            queued = await self.app.enqueue_action_preset(preset_id, "char3")
+        self.assertTrue(queued)
+        job = await self.app.queue.get()
+        self.assertEqual(job.target_char, "char3")
+
     async def test_sound_file_execution(self) -> None:
         """Kiểm tra GiftJob hỗ trợ đường dẫn sound_path."""
         job = core.GiftJob("rose", Path("cho_1_sui.png"), priority=1, sound_path=Path("cho_sui.mp3"), target_char="char1")
@@ -119,6 +132,70 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         idle_all, act_all = self.app.obs._get_sources_for_target("all")
         self.assertEqual((idle_all, act_all), (core.IDLE_SOURCE_NAME, "Action_Source_All"))
 
+    async def test_dynamic_character_routing_supports_added_character(self) -> None:
+        original_count = core.CHARACTER_COUNT
+        try:
+            core.set_character_count(6)
+            obs = core.ObsController(mock_mode=True)
+            self.assertEqual(
+                obs._get_sources_for_target("char6"),
+                ("Idle_Source_6", "Action_Source_6"),
+            )
+            self.assertIn("char6", core.get_character_ids())
+            self.assertEqual(core.CHAR_SHORT_TAGS["char6"], "[NV 6]")
+        finally:
+            core.set_character_count(original_count)
+
+    async def test_remove_character_layer_removes_idle_and_action_scene_items(self) -> None:
+        obs = core.ObsController(mock_mode=False)
+        obs._client = object()
+        obs.is_connected = True
+
+        async def refresh() -> dict[str, int]:
+            obs.existing_inputs = ["Idle_Source_5", "Action_Source_5"]
+            obs._scene_items_cache = {"Idle_Source_5": 51, "Action_Source_5": 52}
+            return obs._scene_items_cache
+
+        with (
+            patch.object(obs, "_refresh_scene_items_cache", side_effect=refresh),
+            patch.object(obs, "_request", new=AsyncMock()) as request,
+        ):
+            removed = await obs.remove_character_layer(5)
+
+        self.assertEqual(removed, ["Idle_Source_5", "Action_Source_5"])
+        removed_ids = [
+            call.kwargs["item_id"]
+            for call in request.await_args_list
+            if call.args and call.args[0] == "remove_scene_item"
+        ]
+        self.assertEqual(removed_ids, [51, 52])
+
+    async def test_sync_all_idle_videos_only_sends_existing_files(self) -> None:
+        original_count = core.CHARACTER_COUNT
+        original_paths = dict(core.IDLE_VIDEO_PATHS)
+        try:
+            core.set_character_count(3)
+            core.IDLE_VIDEO_PATHS[1] = Path(__file__)
+            core.IDLE_VIDEO_PATHS[2] = Path(__file__)
+            core.IDLE_VIDEO_PATHS[3] = Path("missing-idle-video.mp4")
+            obs = core.ObsController(mock_mode=False)
+            obs._client = object()
+            obs.is_connected = True
+            with (
+                patch.object(obs, "ensure_character_layer_sources_exist", new=AsyncMock()),
+                patch.object(obs, "set_idle_video", new=AsyncMock()) as set_idle,
+            ):
+                result = await obs.sync_all_idle_videos()
+
+            self.assertEqual(result["synced"], ["char1", "char2"])
+            self.assertEqual(result["missing"], ["char3"])
+            self.assertEqual(result["errors"], [])
+            self.assertEqual(set_idle.await_count, 2)
+        finally:
+            core.IDLE_VIDEO_PATHS.clear()
+            core.IDLE_VIDEO_PATHS.update(original_paths)
+            core.set_character_count(original_count)
+
     async def test_incomplete_character_pair_falls_back_to_legacy_sources(self) -> None:
         """Kiểm tra thiếu một source trong cặp thì không bật nhầm chế độ layer."""
         obs = core.ObsController(mock_mode=False)
@@ -137,6 +214,81 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         test_path = Path("custom_idle_video.mp4")
         await self.app.obs.set_idle_video(test_path)
         self.assertTrue(self.app.obs.mock_mode)
+
+    async def test_idle_video_targets_numbered_source_without_cached_scene_pair(self) -> None:
+        obs = core.ObsController(mock_mode=False)
+        obs._client = object()
+        obs.is_connected = True
+
+        async def refresh() -> dict[str, int]:
+            obs.existing_inputs = [core.IDLE_SOURCE_NAME, "Idle_Source_2"]
+            obs._scene_items_cache = {core.IDLE_SOURCE_NAME: 1}
+            return obs._scene_items_cache
+
+        with (
+            patch.object(obs, "_refresh_scene_items_cache", side_effect=refresh),
+            patch.object(obs, "_request", new=AsyncMock()) as request,
+            patch.object(core, "resolve_existing_media_path", return_value=Path(__file__)),
+        ):
+            await obs.set_idle_video(Path(__file__), "char2")
+
+        settings_call = next(
+            call for call in request.await_args_list
+            if call.args and call.args[0] == "set_input_settings"
+        )
+        self.assertEqual(settings_call.kwargs["name"], "Idle_Source_2")
+
+    async def test_idle_video_readback_mismatch_is_reported(self) -> None:
+        obs = core.ObsController(mock_mode=False)
+        obs._client = object()
+        obs.is_connected = True
+
+        class Readback:
+            input_settings = {"local_file": "C:/wrong-file.mp4"}
+
+        async def refresh() -> dict[str, int]:
+            obs.existing_inputs = ["Idle_Source_1"]
+            obs._scene_items_cache = {"Idle_Source_1": 1}
+            return obs._scene_items_cache
+
+        async def request(method_name: str, **kwargs: object) -> object:
+            return Readback() if method_name == "get_input_settings" else None
+
+        with (
+            patch.object(obs, "_refresh_scene_items_cache", side_effect=refresh),
+            patch.object(obs, "_request", side_effect=request),
+            patch.object(core, "resolve_existing_media_path", return_value=Path(__file__)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "khong xac nhan"):
+                await obs.set_idle_video(Path(__file__), "char1")
+
+    async def test_clear_idle_video_clears_obs_input_file(self) -> None:
+        obs = core.ObsController(mock_mode=False)
+        obs._client = object()
+        obs.is_connected = True
+
+        class Readback:
+            input_settings = {"local_file": "", "file": ""}
+
+        async def refresh() -> dict[str, int]:
+            obs.existing_inputs = ["Idle_Source_1"]
+            obs._scene_items_cache = {"Idle_Source_1": 1}
+            return obs._scene_items_cache
+
+        async def request(method_name: str, **kwargs: object) -> object:
+            return Readback() if method_name == "get_input_settings" else None
+
+        with (
+            patch.object(obs, "_refresh_scene_items_cache", side_effect=refresh),
+            patch.object(obs, "_request", side_effect=request) as mocked_request,
+        ):
+            await obs.clear_idle_video("char1")
+
+        clear_call = next(
+            call for call in mocked_request.await_args_list
+            if call.args and call.args[0] == "set_input_settings"
+        )
+        self.assertEqual(clear_call.kwargs["settings"]["local_file"], "")
 
     async def test_new_obs_source_refreshes_stale_cache(self) -> None:
         """Kiểm tra source mới thêm vào OBS được tìm thấy sau khi làm mới cache."""
