@@ -607,6 +607,7 @@ class ObsController:
             target_idle_source = idle_name if (await self._get_scene_item_id(idle_name)) is not None else IDLE_SOURCE_NAME
 
             if visible:
+                # 1. Bật Action Video và cho phát ngay ở lớp trên (Overlapping Layer)
                 if action_item_id is not None:
                     await self._request(
                         "set_scene_item_enabled",
@@ -614,7 +615,13 @@ class ObsController:
                         item_id=action_item_id,
                         enabled=True,
                     )
-                # Ẩn Video Nền Idle khi đang phát Action Video
+                with contextlib.suppress(Exception):
+                    await self._request("trigger_media_input_action", name=target_action_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
+
+                # Chờ 100ms để OBS decoder nạp frame 1 của Action Video đè lên màn hình
+                await asyncio.sleep(0.1)
+
+                # 2. Sau khi Action Video đã che màn hình, mới ân Nguồn Video Nền Idle (Triệt tiêu 100% chớp nháy)
                 idle_candidates = [target_idle_source, idle_name, IDLE_SOURCE_NAME] + [f"Idle_Source_{i}" for i in range(1, 5)]
                 for isrc in idle_candidates:
                     iid = await self._get_scene_item_id(isrc)
@@ -622,21 +629,8 @@ class ObsController:
                         with contextlib.suppress(Exception):
                             await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=iid, enabled=False)
                             await self._request("trigger_media_input_action", name=isrc, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE")
-
-                with contextlib.suppress(Exception):
-                    await self._request("trigger_media_input_action", name=target_action_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
             else:
-                if action_item_id is not None:
-                    await self._request(
-                        "set_scene_item_enabled",
-                        scene_name=SCENE_NAME,
-                        item_id=action_item_id,
-                        enabled=False,
-                    )
-                with contextlib.suppress(Exception):
-                    await self._request("trigger_media_input_action", name=target_action_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
-
-                # Hiện lại Video Nền Idle khi Action kết thúc
+                # 1. Bật Video Nền Idle lên trước ở phía dưới
                 if idle_item_id is not None:
                     await self._request(
                         "set_scene_item_enabled",
@@ -646,6 +640,20 @@ class ObsController:
                     )
                     with contextlib.suppress(Exception):
                         await self._request("trigger_media_input_action", name=target_idle_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
+
+                # Chờ 100ms để Nguồn Video Nền sẵn sàng render frame bên dưới
+                await asyncio.sleep(0.1)
+
+                # 2. Tắt Action Video sau khi Video Nền đã hiển thị sẵn sàng
+                if action_item_id is not None:
+                    await self._request(
+                        "set_scene_item_enabled",
+                        scene_name=SCENE_NAME,
+                        item_id=action_item_id,
+                        enabled=False,
+                    )
+                with contextlib.suppress(Exception):
+                    await self._request("trigger_media_input_action", name=target_action_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
 
         # Studio Mode
         with contextlib.suppress(Exception):
