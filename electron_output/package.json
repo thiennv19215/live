@@ -1,0 +1,28 @@
+{
+  "name": "tiktok-live-output",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dedicated capture window for TikTok Live Studio",
+  "author": "TikTok Live Control Room",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "dist": "electron-builder --win portable --x64"
+  },
+  "devDependencies": {
+    "electron": "43.3.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "io.streamtoearn.tiktok-live-output",
+    "productName": "TikTok Live Output",
+    "asar": true,
+    "directories": { "output": "dist" },
+    "files": ["main.js", "window-options.js", "package.json"],
+    "win": {
+      "target": ["portable"],
+      "artifactName": "TikTokLiveOutput.exe"
+    }
+  }
+}

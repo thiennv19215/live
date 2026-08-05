@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 import tiktok_obs_controller as core
 from tiktok_overlay import LocalOverlayServer
+from tiktok_output_window import DEFAULT_OUTPUT_RATIO, OUTPUT_PRESETS, ElectronOutputWindow
 
 from tiktok_obs_gui_mapping import GiftMappingMixin
 from tiktok_obs_gui_settings import ObsSettingsMixin
@@ -102,6 +103,10 @@ class TikTokObsGui(ObsSettingsMixin, GiftMappingMixin):
             overlay_status = f"OFFLINE · {exc}"
         self.overlay_url = tk.StringVar(value=overlay_url)
         self.overlay_status = tk.StringVar(value=overlay_status)
+        configured_ratio = core.OUTPUT_RATIO if core.OUTPUT_RATIO in OUTPUT_PRESETS else DEFAULT_OUTPUT_RATIO
+        self.output_ratio = tk.StringVar(value=configured_ratio)
+        self.output_status = tk.StringVar(value="CHƯA MỞ")
+        self.output_manager = ElectronOutputWindow(core.APP_DIRECTORY)
 
         # Mặc định False để kết nối OBS thật khi bấm nút
         self.mock_mode_var = tk.BooleanVar(value=False)
@@ -476,6 +481,7 @@ class TikTokObsGui(ObsSettingsMixin, GiftMappingMixin):
             "idle_source_name": self.idle_source.get().strip(),
             "action_source_name": self.action_source.get().strip(),
             "character_count": 1,
+            "output_ratio": self.output_ratio.get(),
             "idle_video_paths": assigned_paths,
         }
         if "1" in assigned_paths:
@@ -657,7 +663,32 @@ class TikTokObsGui(ObsSettingsMixin, GiftMappingMixin):
             return
         webbrowser.open(f"{self.overlay.url}?debug=1&muted=1")
 
+    def open_output_window(self) -> None:
+        if not self.overlay.is_running:
+            messagebox.showerror("Overlay Offline", "Local Browser Overlay chưa khởi động được.", parent=self.root)
+            return
+        try:
+            self.output_manager.start(self.overlay.url, self.output_ratio.get())
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            self.output_status.set("LỖI KHỞI ĐỘNG")
+            messagebox.showerror("TikTok Live Output", str(exc), parent=self.root)
+            return
+        width, height = OUTPUT_PRESETS[self.output_ratio.get()]
+        self.output_status.set(f"ĐANG MỞ · {width}x{height}")
+        self.status_text.set("OUTPUT EXE ĐÃ SẴN SÀNG · CHỌN TRONG TIKTOK STUDIO")
+
+    def close_output_window(self) -> None:
+        self.output_manager.stop()
+        self.output_status.set("ĐÃ ĐÓNG")
+
+    def on_output_ratio_changed(self, _event: tk.Event | None = None) -> None:
+        self._persist_runtime_config()
+        if self.output_manager.is_running:
+            self.open_output_window()
+
     def _refresh_dashboard(self) -> None:
+        if not self.output_manager.is_running and self.output_status.get().startswith("ĐANG MỞ"):
+            self.output_status.set("ĐÃ ĐÓNG")
         if self.app:
             # Update Pills
             if self.app.obs.is_connected:
@@ -790,6 +821,7 @@ class TikTokObsGui(ObsSettingsMixin, GiftMappingMixin):
         if worker_alive and time.monotonic() < self._close_deadline:
             self.root.after(100, self._wait_for_shutdown_before_close)
             return
+        self.output_manager.stop()
         self.overlay.stop()
         self.root.destroy()
 

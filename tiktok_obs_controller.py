@@ -77,6 +77,7 @@ def load_obs_config() -> dict[str, Any]:
         "idle_source_name": "Idle_Source",
         "action_source_name": "Action_Source",
         "character_count": 1,
+        "output_ratio": "9:16",
     }
     if OBS_CONFIG_FILE.is_file():
         try:
@@ -104,6 +105,7 @@ OBS_PASSWORD = str(_saved_obs_cfg.get("obs_password", OBS_PASSWORD))
 SCENE_NAME = str(_saved_obs_cfg.get("scene_name", SCENE_NAME))
 IDLE_SOURCE_NAME = str(_saved_obs_cfg.get("idle_source_name", IDLE_SOURCE_NAME))
 ACTION_SOURCE_NAME = str(_saved_obs_cfg.get("action_source_name", ACTION_SOURCE_NAME))
+OUTPUT_RATIO = str(_saved_obs_cfg.get("output_ratio", "9:16"))
 CHARACTER_COUNT = 1
 _saved_idle_paths = _saved_obs_cfg.get("idle_video_paths", {})
 _has_dynamic_idle_paths = "idle_video_paths" in _saved_obs_cfg and isinstance(_saved_idle_paths, dict)

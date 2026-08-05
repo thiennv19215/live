@@ -1,5 +1,14 @@
 # TikTok Live OBS Controller & Dashboard
 
+## Dedicated Electron output
+
+1. Choose an aspect ratio in `OUTPUT EXE - TIKTOK STUDIO` (`9:16` is recommended for vertical live video).
+2. Click `MO OUTPUT EXE` and keep the clean video window open.
+3. In TikTok Studio, add a camera/full-screen or window source and select `TikTok Live Output.exe` (the release file is named `TikTokLiveOutput.exe`).
+4. Fit that source to the canvas. Changing the ratio restarts the active output at the new aspect ratio.
+
+The available presets are `9:16`, `16:9`, `1:1`, and `4:5`. Press `F11` to toggle full screen or `Esc` to close the output window. The existing Browser Overlay remains available as a fallback.
+
 Ứng dụng điều khiển OBS Studio tự động thông qua sự kiện quà tặng TikTok Live realtime.
 
 ## Tính năng

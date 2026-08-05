@@ -3,6 +3,7 @@ __pycache__/
 *$py.class
 build/
 dist/
+node_modules/
 *.egg-info/
 .idea/
 .vscode/

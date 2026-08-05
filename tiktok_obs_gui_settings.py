@@ -103,6 +103,23 @@ class ObsSettingsMixin:
         tk.Button(overlay_buttons, text="COPY URL", font=("Segoe UI", 8, "bold"), bg=COLOR_EMERALD, fg="#042f2e", relief="flat", padx=8, pady=3, command=self.copy_overlay_url, cursor="hand2").pack(side="left", fill="x", expand=True, padx=(0, 3))
         tk.Button(overlay_buttons, text="MỞ PREVIEW", font=("Segoe UI", 8, "bold"), bg="#164e63", fg="#cffafe", relief="flat", padx=8, pady=3, command=self.open_overlay_preview, cursor="hand2").pack(side="left", fill="x", expand=True, padx=(3, 0))
 
+        output_box = tk.Frame(panel, bg="#1b1308", highlightbackground=COLOR_AMBER, highlightthickness=1, padx=8, pady=6)
+        output_box.pack(fill="x", pady=(0, 5))
+        output_header = tk.Frame(output_box, bg="#1b1308")
+        output_header.pack(fill="x")
+        tk.Label(output_header, text="OUTPUT EXE · TIKTOK STUDIO", font=("Segoe UI", 9, "bold"), fg=COLOR_AMBER, bg="#1b1308").pack(side="left")
+        tk.Label(output_header, textvariable=self.output_status, font=("Segoe UI", 7, "bold"), fg="#fde68a", bg="#1b1308").pack(side="right")
+        ratio_row = tk.Frame(output_box, bg="#1b1308")
+        ratio_row.pack(fill="x", pady=(5, 0))
+        tk.Label(ratio_row, text="Tỉ lệ kết quả:", font=("Segoe UI", 8), fg=TEXT_MUTED, bg="#1b1308").pack(side="left")
+        ratio_combo = ttk.Combobox(ratio_row, values=("9:16", "16:9", "1:1", "4:5"), textvariable=self.output_ratio, state="readonly", width=8)
+        ratio_combo.pack(side="right")
+        ratio_combo.bind("<<ComboboxSelected>>", self.on_output_ratio_changed)
+        output_buttons = tk.Frame(output_box, bg="#1b1308")
+        output_buttons.pack(fill="x", pady=(5, 0))
+        tk.Button(output_buttons, text="MỞ OUTPUT EXE", font=("Segoe UI", 8, "bold"), bg=COLOR_AMBER, fg="#451a03", relief="flat", padx=8, pady=4, command=self.open_output_window, cursor="hand2").pack(side="left", fill="x", expand=True, padx=(0, 3))
+        tk.Button(output_buttons, text="ĐÓNG OUTPUT", font=("Segoe UI", 8, "bold"), bg="#334155", fg="#f8fafc", relief="flat", padx=8, pady=4, command=self.close_output_window, cursor="hand2").pack(side="left", fill="x", expand=True, padx=(3, 0))
+
         # Dedicated OBS Settings & Open Folder Buttons
         btn_obs_cfg = tk.Button(panel, text="⚙ Cài Đặt Kết Nối OBS Studio", font=("Segoe UI", 9, "bold"), bg="#1e293b", fg=COLOR_CYAN, activebackground=COLOR_CYAN, activeforeground="#000", relief="flat", padx=6, pady=5, command=self.open_obs_settings_dialog)
         btn_obs_cfg.pack(fill="x", pady=(4, 4))
