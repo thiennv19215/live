@@ -74,7 +74,7 @@ def load_obs_config() -> dict[str, Any]:
         "scene_name": "Main Scene",
         "idle_source_name": "Idle_Source",
         "action_source_name": "Action_Source",
-        "character_count": 4,
+        "character_count": 1,
     }
     if OBS_CONFIG_FILE.is_file():
         try:
@@ -102,7 +102,7 @@ OBS_PASSWORD = str(_saved_obs_cfg.get("obs_password", OBS_PASSWORD))
 SCENE_NAME = str(_saved_obs_cfg.get("scene_name", SCENE_NAME))
 IDLE_SOURCE_NAME = str(_saved_obs_cfg.get("idle_source_name", IDLE_SOURCE_NAME))
 ACTION_SOURCE_NAME = str(_saved_obs_cfg.get("action_source_name", ACTION_SOURCE_NAME))
-CHARACTER_COUNT = max(1, int(_saved_obs_cfg.get("character_count", 4)))
+CHARACTER_COUNT = 1
 _saved_idle_paths = _saved_obs_cfg.get("idle_video_paths", {})
 _has_dynamic_idle_paths = "idle_video_paths" in _saved_obs_cfg and isinstance(_saved_idle_paths, dict)
 IDLE_VIDEO_PATHS: dict[int, Path] = {}
@@ -135,7 +135,8 @@ def get_idle_video_path(target: int | str) -> Path:
 
 def set_idle_video_path(target: int | str, path: Path) -> None:
     global IDLE_VIDEO_PATH, IDLE_VIDEO_PATH_1, IDLE_VIDEO_PATH_2, IDLE_VIDEO_PATH_3, IDLE_VIDEO_PATH_4
-    idx = int(str(target).lower().strip().removeprefix("char"))
+    raw_target = str(target).lower().strip()
+    idx = 1 if raw_target in ("main", "idle", "background") else int(raw_target.removeprefix("char"))
     IDLE_VIDEO_PATHS[idx] = Path(path)
     if idx == 1:
         IDLE_VIDEO_PATH = IDLE_VIDEO_PATH_1 = Path(path)
@@ -261,11 +262,11 @@ def save_action_presets(presets: dict[str, ActionPreset | dict[str, Any]]) -> No
 ACTION_PRESETS = load_action_presets()
 
 DEFAULT_GIFT_MAPPING: dict[str, tuple[str, int, str, str]] = {
-    "rose": ("action_dance_rose", 1, "", "char1"),
-    "doughnut": ("action_funny_doughnut", 2, "", "char2"),
-    "perfume": ("action_funny_doughnut", 2, "", "char2"),
-    "tiktok": ("action_dance_tiktok", 3, "", "char3"),
-    "lion": ("action_lion_transform", 5, "", "all"),
+    "rose": ("action_dance_rose", 1, "", "main"),
+    "doughnut": ("action_funny_doughnut", 2, "", "main"),
+    "perfume": ("action_funny_doughnut", 2, "", "main"),
+    "tiktok": ("action_dance_tiktok", 3, "", "main"),
+    "lion": ("action_lion_transform", 5, "", "main"),
 }
 
 
@@ -304,8 +305,7 @@ def load_gift_mapping() -> dict[str, tuple[str, int, str, str]]:
                         fn = str(raw_fn).strip()
                     prio = int(v[1])
                     sound_fn = str(v[2]) if len(v) > 2 else ""
-                    target_char = str(v[3]) if len(v) > 3 else "char1"
-                    res[gift_key] = (fn, prio, sound_fn, target_char)
+                    res[gift_key] = (fn, prio, sound_fn, "main")
                 return res
         except Exception:
             pass
@@ -319,8 +319,7 @@ def save_gift_mapping(mapping: dict[str, Any]) -> None:
             fn = str(v[0]).strip()
             prio = int(v[1])
             sound_fn = str(v[2]) if len(v) > 2 else ""
-            target_char = str(v[3]) if len(v) > 3 else "char1"
-            data[str(k).lower().strip()] = [fn, prio, sound_fn, target_char]
+            data[str(k).lower().strip()] = [fn, prio, sound_fn, "main"]
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
@@ -418,7 +417,7 @@ class GiftJob:
     file_path: Path
     priority: int
     sound_path: Path | None = None
-    target_char: str = "char1"
+    target_char: str = "main"
 
 
 class PriorityGiftQueue:
@@ -516,15 +515,7 @@ class ObsController:
                 self.is_connected = True
                 LOGGER.info("Da ket noi va xac minh OBS WebSocket v5 tai %s:%s", OBS_HOST, OBS_PORT)
 
-                layer_pairs = [
-                    idx for idx in range(1, CHARACTER_COUNT + 1)
-                    if f"Idle_Source_{idx}" in (self._scene_items_cache or {})
-                    and f"Action_Source_{idx}" in (self._scene_items_cache or {})
-                ]
-                if layer_pairs:
-                    LOGGER.info("[OBS] Che do Layer Nhan Vat san sang cho NV: %s", ", ".join(map(str, layer_pairs)))
-                else:
-                    LOGGER.info("[OBS] Dang dung che do Legacy. Tao Idle_Source_1..4 va Action_Source_1..4 de bat layer rieng.")
+                LOGGER.info("[OBS] Che do don gian: Idle_Source nen chung + Action_Source kich hoat")
             except Exception as exc:
                 self.is_connected = False
                 client, self._client = self._client, None
@@ -551,92 +542,66 @@ class ObsController:
             raise RuntimeError("Thieu Media Source bat buoc trong Scene '%s': %s" % (SCENE_NAME, ", ".join(missing)))
 
     async def reset_obs_display_state(self) -> None:
-        """Reset OBS into either numbered-layer mode or legacy single-source mode."""
+        """Đưa OBS về video nền chung và ẩn source hành động."""
         if self.mock_mode or not self._client:
             return
 
         try:
             await self._refresh_scene_items_cache()
-            scene_items = self._scene_items_cache or {}
-            layered_indices = self._get_complete_layer_indices(scene_items)
-            layered_mode = bool(layered_indices)
-            active_numbered_idles = {f"Idle_Source_{idx}" for idx in layered_indices}
-            action_sources = ["Action_Source_All", ACTION_SOURCE_NAME] + [f"Action_Source_{i}" for i in range(1, CHARACTER_COUNT + 1)]
-            numbered_idle_sources = [f"Idle_Source_{i}" for i in range(1, CHARACTER_COUNT + 1)]
-
-            # 1. Ẩn toàn bộ Action sources & dừng media cũ
-            for asrc in action_sources:
-                iid = await self._get_scene_item_id(asrc)
-                if iid is not None:
-                    with contextlib.suppress(Exception):
-                        await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=iid, enabled=False)
-                        await self._request("trigger_media_input_action", name=asrc, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
-
-            # Numbered video layers and the old shared source must not overlap.
-            for isrc in [IDLE_SOURCE_NAME] + numbered_idle_sources:
-                iid = await self._get_scene_item_id(isrc)
-                if iid is not None:
-                    should_enable = isrc in active_numbered_idles if layered_mode else isrc == IDLE_SOURCE_NAME
-                    with contextlib.suppress(Exception):
-                        await self._request(
-                            "set_scene_item_enabled",
-                            scene_name=SCENE_NAME,
-                            item_id=iid,
-                            enabled=should_enable,
-                        )
-                        await self._request(
-                            "trigger_media_input_action",
-                            name=isrc,
-                            action=(
-                                "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"
-                                if should_enable
-                                else "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP"
-                            ),
-                        )
-
-            LOGGER.info(
-                "[OBS] Da reset hien thi theo che do %s",
-                "video rieng " + ", ".join(map(str, layered_indices)) if layered_mode else "1 video chung",
-            )
+            action_id = await self._get_scene_item_id(ACTION_SOURCE_NAME)
+            idle_id = await self._get_scene_item_id(IDLE_SOURCE_NAME)
+            if action_id is not None:
+                await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=action_id, enabled=False)
+                with contextlib.suppress(Exception):
+                    await self._request("trigger_media_input_action", name=ACTION_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
+            if idle_id is not None:
+                await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=idle_id, enabled=True)
+                with contextlib.suppress(Exception):
+                    await self._request("trigger_media_input_action", name=IDLE_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY")
+            LOGGER.info("[OBS] Da reset ve 1 video nen chung")
         except Exception as exc:
             LOGGER.debug("reset_obs_display_state exception: %s", exc)
 
     async def ensure_default_sources_exist(self) -> None:
         if self.mock_mode or not self._client:
             return
-        try:
+        await self._refresh_scene_items_cache()
+        scene_items = self._scene_items_cache or {}
+
+        for source_name, enabled in (
+            (IDLE_SOURCE_NAME, True),
+            (ACTION_SOURCE_NAME, False),
+        ):
+            if source_name in scene_items:
+                continue
+
+            try:
+                if source_name in self.existing_inputs:
+                    await self._request(
+                        "create_scene_item",
+                        scene_name=SCENE_NAME,
+                        source_name=source_name,
+                        enabled=enabled,
+                    )
+                    LOGGER.info("[OBS] Da dua source co san '%s' vao Scene '%s'", source_name, SCENE_NAME)
+                else:
+                    await self._request(
+                        "create_input",
+                        sceneName=SCENE_NAME,
+                        inputName=source_name,
+                        inputKind="ffmpeg_source",
+                        inputSettings={},
+                        sceneItemEnabled=enabled,
+                    )
+                    LOGGER.info("[OBS] Da tu dong tao source '%s' trong Scene '%s'", source_name, SCENE_NAME)
+            except Exception as exc:
+                raise RuntimeError(
+                    "Khong the tu dong tao/gan Media Source '%s' vao Scene '%s': %s"
+                    % (source_name, SCENE_NAME, exc)
+                ) from exc
+
             await self._refresh_scene_items_cache()
-            existing = getattr(self, "existing_inputs", [])
-
-            needed = []
-            if IDLE_SOURCE_NAME not in existing:
-                needed.append((IDLE_SOURCE_NAME, True))
-            if ACTION_SOURCE_NAME not in existing:
-                needed.append((ACTION_SOURCE_NAME, False))
-
-            if not needed:
-                return
-
-            possible_kinds = ["ffmpeg_source", "vlc_source"]
-            for src_name, default_enabled in needed:
-                for kind in possible_kinds:
-                    try:
-                        await asyncio.to_thread(
-                            self._client.create_input,
-                            sceneName=SCENE_NAME,
-                            inputName=src_name,
-                            inputKind=kind,
-                            inputSettings={},
-                            sceneItemEnabled=default_enabled,
-                        )
-                        LOGGER.info("Tu dong tao Nguon chuẩn '%s' trong OBS Scene '%s'", src_name, SCENE_NAME)
-                        break
-                    except Exception:
-                        continue
-
-            await self._refresh_scene_items_cache()
-        except Exception as exc:
-            LOGGER.debug("ensure_default_sources_exist exception: %s", exc)
+            scene_items = self._scene_items_cache or {}
 
     async def ensure_character_layer_sources_exist(
         self,
@@ -849,179 +814,127 @@ class ObsController:
         ]
 
     def _get_sources_for_target(self, target_char: str = "char1") -> tuple[str, str]:
-        target = str(target_char).lower().strip()
-        raw_idx = target.removeprefix("char")
-        if raw_idx.isdigit() and 1 <= int(raw_idx) <= CHARACTER_COUNT:
-            idx = raw_idx
-            idle_candidate = f"Idle_Source_{idx}"
-            action_candidate = f"Action_Source_{idx}"
-            scene_items = self._scene_items_cache or {}
-            if self.mock_mode or (idle_candidate in scene_items and action_candidate in scene_items):
-                return (idle_candidate, action_candidate)
-            return (IDLE_SOURCE_NAME, ACTION_SOURCE_NAME)
-        if target == "all":
-            scene_items = self._scene_items_cache or {}
-            has_complete_layers = bool(self._get_complete_layer_indices(scene_items))
-            action_name = (
-                "Action_Source_All"
-                if self.mock_mode or ("Action_Source_All" in scene_items and has_complete_layers)
-                else ACTION_SOURCE_NAME
-            )
-            return (IDLE_SOURCE_NAME, action_name)
         return (IDLE_SOURCE_NAME, ACTION_SOURCE_NAME)
 
     async def _move_action_above_idle(self, action_name: str, idle_names: list[str]) -> None:
         action_item_id = await self._get_scene_item_id(action_name)
         if action_item_id is None or self.mock_mode or self._scene_item_count <= 0:
             return
-        idle_indices = [self._scene_item_indices[name] for name in idle_names if name in self._scene_item_indices]
-        target_index = min(self._scene_item_count - 1, max(idle_indices) + 1) if idle_indices else self._scene_item_count - 1
         with contextlib.suppress(Exception):
             await self._request(
                 "set_scene_item_index",
                 scene_name=SCENE_NAME,
                 item_id=action_item_id,
-                item_index=target_index,
+                item_index=self._scene_item_count - 1,
             )
 
-    async def _set_action_visible(self, visible: bool, target_char: str = "char1") -> None:
+    async def _move_action_behind_idle(self) -> None:
+        """Đặt action dưới video nền trong lúc OBS mở và giải mã file mới."""
+        action_item_id = await self._get_scene_item_id(ACTION_SOURCE_NAME)
+        idle_index = self._scene_item_indices.get(IDLE_SOURCE_NAME)
+        if action_item_id is None or idle_index is None or self.mock_mode:
+            return
+        with contextlib.suppress(Exception):
+            await self._request(
+                "set_scene_item_index",
+                scene_name=SCENE_NAME,
+                item_id=action_item_id,
+                item_index=max(0, idle_index - 1),
+            )
+
+    async def _preload_action_source(self) -> bool:
+        """Khởi động action phía sau nền và chờ decoder OBS sẵn sàng."""
+        if self.mock_mode:
+            return False
+        action_item_id = await self._get_scene_item_id(ACTION_SOURCE_NAME)
+        if action_item_id is None:
+            return False
+
+        await self._move_action_behind_idle()
+        await self._request(
+            "set_scene_item_enabled",
+            scene_name=SCENE_NAME,
+            item_id=action_item_id,
+            enabled=True,
+        )
+        await self._request(
+            "trigger_media_input_action",
+            name=ACTION_SOURCE_NAME,
+            action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART",
+        )
+
+        deadline = asyncio.get_running_loop().time() + 1.5
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                status = await self._request("get_media_input_status", name=ACTION_SOURCE_NAME)
+                state = str(getattr(status, "media_state", "")).upper()
+                if state in {"OBS_MEDIA_STATE_PLAYING", "OBS_MEDIA_STATE_PAUSED"}:
+                    LOGGER.info("[OBS] Action da preload xong; chuyen canh khong khung")
+                    return True
+                if state == "OBS_MEDIA_STATE_ERROR":
+                    break
+            except Exception as exc:
+                LOGGER.warning("[OBS] Khong doc duoc trang thai preload: %s", exc)
+                break
+            await asyncio.sleep(0.05)
+
+        LOGGER.warning("[OBS] Preload chua san sang sau 1.5s; dung cach kich hoat thong thuong")
+        return False
+
+    async def _set_action_visible(
+        self,
+        visible: bool,
+        target_char: str = "char1",
+        *,
+        restart_media: bool = True,
+    ) -> None:
         """Apply a complete display state, replaying it if a request reconnects mid-sequence."""
         async with self._display_lock:
             for _ in range(3):
                 generation = self._connection_generation
-                await self._set_action_visible_once(visible, target_char)
+                await self._set_action_visible_once(visible, target_char, restart_media=restart_media)
                 if self._connection_generation == generation:
                     return
                 LOGGER.info("[OBS] Ket noi lai giua luc doi source; ap dung lai toan bo trang thai")
             raise ConnectionError("OBS lien tuc reconnect khi dang doi Action/Idle; khong the xac lap trang thai an toan")
 
-    async def _set_action_visible_once(self, visible: bool, target_char: str = "char1") -> None:
+    async def _set_action_visible_once(
+        self,
+        visible: bool,
+        target_char: str = "char1",
+        *,
+        restart_media: bool = True,
+    ) -> None:
         if self.mock_mode:
-            LOGGER.info("[MOCK OBS] Target %s: Set action visible = %s", target_char, visible)
+            LOGGER.info("[MOCK OBS] Set shared action visible = %s", visible)
             return
 
-        target_norm = str(target_char).lower().strip()
-        if target_norm == "all":
-            scene_items = self._scene_items_cache or {}
-            layered_idle_sources = [f"Idle_Source_{i}" for i in self._get_complete_layer_indices(scene_items)]
-            layered = "Action_Source_All" in scene_items and bool(layered_idle_sources)
-            target_action_source = "Action_Source_All" if layered else ACTION_SOURCE_NAME
-            action_item_id = await self._get_scene_item_id(target_action_source)
-            idle_sources = layered_idle_sources if layered else [IDLE_SOURCE_NAME]
-
-            if visible:
-                await self._move_action_above_idle(target_action_source, idle_sources)
-                if layered and IDLE_SOURCE_NAME in scene_items:
-                    legacy_idle_item_id = await self._get_scene_item_id(IDLE_SOURCE_NAME)
-                    if legacy_idle_item_id is not None:
-                        await self._request(
-                            "set_scene_item_enabled",
-                            scene_name=SCENE_NAME,
-                            item_id=legacy_idle_item_id,
-                            enabled=False,
-                        )
-                        with contextlib.suppress(Exception):
-                            await self._request(
-                                "trigger_media_input_action",
-                                name=IDLE_SOURCE_NAME,
-                                action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP",
-                            )
-                if action_item_id is not None:
-                    await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=action_item_id, enabled=True)
+        action_item_id = await self._get_scene_item_id(ACTION_SOURCE_NAME)
+        idle_item_id = await self._get_scene_item_id(IDLE_SOURCE_NAME)
+        if visible:
+            # Giữ nền trong lúc preload, rồi tắt ngay khi action đã sẵn sàng.
+            if idle_item_id is not None:
+                await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=idle_item_id, enabled=True)
                 with contextlib.suppress(Exception):
-                    await self._request("trigger_media_input_action", name=target_action_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
-                await asyncio.sleep(0.08)
-                for isrc in idle_sources:
-                    iid = await self._get_scene_item_id(isrc)
-                    if iid is not None:
-                        with contextlib.suppress(Exception):
-                            await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=iid, enabled=False)
-            else:
-                for isrc in idle_sources:
-                    iid = await self._get_scene_item_id(isrc)
-                    if iid is not None:
-                        with contextlib.suppress(Exception):
-                            await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=iid, enabled=True)
-                            await self._request("trigger_media_input_action", name=isrc, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY")
-                await asyncio.sleep(0.12 if layered else 0.35)
-                if action_item_id is not None:
-                    await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=action_item_id, enabled=False)
+                    await self._request("trigger_media_input_action", name=IDLE_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY")
+            await self._move_action_above_idle(ACTION_SOURCE_NAME, [IDLE_SOURCE_NAME])
+            if action_item_id is not None:
+                await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=action_item_id, enabled=True)
+            if restart_media:
                 with contextlib.suppress(Exception):
-                    await self._request("trigger_media_input_action", name=target_action_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
+                    await self._request("trigger_media_input_action", name=ACTION_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
+                await asyncio.sleep(0.12)
+            if idle_item_id is not None:
+                await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=idle_item_id, enabled=False)
         else:
-            idle_name, action_name = self._get_sources_for_target(target_char)
-            action_item_id = await self._get_scene_item_id(action_name)
-            scene_items = self._scene_items_cache or {}
-            complete_layer_indices = self._get_complete_layer_indices(scene_items)
-            layered_idle_sources = [f"Idle_Source_{idx}" for idx in complete_layer_indices]
-            target_layered = idle_name.startswith("Idle_Source_") and action_name.startswith("Action_Source_")
-            fallback_over_layers = bool(layered_idle_sources) and not target_layered
-            displayed_idle_sources = layered_idle_sources if fallback_over_layers else [idle_name]
-
-            if visible:
-                await self._move_action_above_idle(action_name, displayed_idle_sources)
-                if (
-                    (target_layered and IDLE_SOURCE_NAME != idle_name) or fallback_over_layers
-                ) and IDLE_SOURCE_NAME in scene_items:
-                    legacy_idle_item_id = await self._get_scene_item_id(IDLE_SOURCE_NAME)
-                    if legacy_idle_item_id is not None:
-                        with contextlib.suppress(Exception):
-                            await self._request(
-                                "set_scene_item_enabled",
-                                scene_name=SCENE_NAME,
-                                item_id=legacy_idle_item_id,
-                                enabled=False,
-                            )
-                            await self._request(
-                                "trigger_media_input_action",
-                                name=IDLE_SOURCE_NAME,
-                                action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP",
-                            )
-                if action_item_id is not None:
-                    await self._request(
-                        "set_scene_item_enabled",
-                        scene_name=SCENE_NAME,
-                        item_id=action_item_id,
-                        enabled=True,
-                    )
+            if action_item_id is not None:
+                await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=action_item_id, enabled=False)
+            with contextlib.suppress(Exception):
+                await self._request("trigger_media_input_action", name=ACTION_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
+            if idle_item_id is not None:
+                await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=idle_item_id, enabled=True)
                 with contextlib.suppress(Exception):
-                    await self._request("trigger_media_input_action", name=action_name, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
-                await asyncio.sleep(0.08)
-                for source_name in displayed_idle_sources:
-                    source_item_id = await self._get_scene_item_id(source_name)
-                    if source_item_id is not None:
-                        await self._request(
-                            "set_scene_item_enabled",
-                            scene_name=SCENE_NAME,
-                            item_id=source_item_id,
-                            enabled=False,
-                        )
-            else:
-                for source_name in displayed_idle_sources:
-                    source_item_id = await self._get_scene_item_id(source_name)
-                    if source_item_id is not None:
-                        await self._request(
-                            "set_scene_item_enabled",
-                            scene_name=SCENE_NAME,
-                            item_id=source_item_id,
-                            enabled=True,
-                        )
-                        with contextlib.suppress(Exception):
-                            await self._request(
-                                "trigger_media_input_action",
-                                name=source_name,
-                                action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY",
-                            )
-                await asyncio.sleep(0.12 if target_layered or fallback_over_layers else 0.35)
-                if action_item_id is not None:
-                    await self._request(
-                        "set_scene_item_enabled",
-                        scene_name=SCENE_NAME,
-                        item_id=action_item_id,
-                        enabled=False,
-                    )
-                with contextlib.suppress(Exception):
-                    await self._request("trigger_media_input_action", name=action_name, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
+                    await self._request("trigger_media_input_action", name=IDLE_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY")
 
     def _resolve_real_source_name(self, preferred_name: str, fallback_default: str) -> str:
         inputs = getattr(self, "existing_inputs", [])
@@ -1045,12 +958,14 @@ class ObsController:
             # OBS assigns a new scene-item ID when a source is deleted/recreated.
             await self._refresh_scene_items_cache()
 
-        idle_name, action_name = self._get_sources_for_target(target_char)
-        target_action_source = self._resolve_real_source_name(action_name, ACTION_SOURCE_NAME)
+        target_action_source = (
+            ACTION_SOURCE_NAME
+            if self.mock_mode
+            else self._resolve_real_source_name(ACTION_SOURCE_NAME, ACTION_SOURCE_NAME)
+        )
 
-        LOGGER.info("[OBS] Phat action video (%s): %s tren Nguon %s", target_char, video_path.name, target_action_source)
-        if sound_path and sound_path.is_file():
-            play_sound_file(sound_path)
+        LOGGER.info("[OBS] Kich hoat action: %s tren Nguon %s", video_path.name, target_action_source)
+        preloaded = False
 
         if not self.mock_mode and video_path.is_file():
             clean_path = str(video_path.resolve()).replace("\\", "/")
@@ -1072,7 +987,17 @@ class ObsController:
                 },
                 overlay=True,
             )
-        await self._set_action_visible(True, target_char=target_char)
+            await self._verify_input_file(target_action_source, clean_path)
+            LOGGER.info("[OBS] Da xac nhan file action tren %s", target_action_source)
+            if not is_image:
+                preloaded = await self._preload_action_source()
+        if sound_path and sound_path.is_file():
+            play_sound_file(sound_path)
+        await self._set_action_visible(
+            True,
+            target_char="main",
+            restart_media=not preloaded,
+        )
 
     async def wait_for_action_end(self, target_char: str, fallback_duration: float) -> None:
         """Poll OBS playback state, using duration only as a bounded fallback."""
@@ -1080,8 +1005,11 @@ class ObsController:
             await asyncio.sleep(fallback_duration)
             return
 
-        _, action_name = self._get_sources_for_target(target_char)
-        target_action_source = self._resolve_real_source_name(action_name, ACTION_SOURCE_NAME)
+        target_action_source = (
+            ACTION_SOURCE_NAME
+            if self.mock_mode
+            else self._resolve_real_source_name(ACTION_SOURCE_NAME, ACTION_SOURCE_NAME)
+        )
         if target_action_source in self._looping_action_sources:
             await asyncio.sleep(fallback_duration)
             return
@@ -1111,13 +1039,7 @@ class ObsController:
         LOGGER.warning("[OBS] Media %s khong vao trang thai ket thuc sau %.1fs; dung watchdog timeout", target_action_source, timeout)
 
     def _preferred_idle_source(self, target_char: str) -> str:
-        target = str(target_char).lower().strip()
-        target_indices = {key: str(idx) for idx in range(1, CHARACTER_COUNT + 1) for key in (f"char{idx}", str(idx))}
-        return (
-            f"Idle_Source_{target_indices[target]}"
-            if target in target_indices
-            else IDLE_SOURCE_NAME
-        )
+        return IDLE_SOURCE_NAME
 
     async def _verify_input_file(self, source_name: str, expected_path: str) -> None:
         response = await self._request("get_input_settings", name=source_name)
@@ -1132,18 +1054,15 @@ class ObsController:
         video_path = resolve_existing_media_path(video_path)
         if not self.mock_mode and not video_path.is_file():
             raise FileNotFoundError(f"Khong tim thay video Idle: {video_path}")
-        target_index = str(target_char).lower().strip().removeprefix("char")
-        if not self.mock_mode and target_index.isdigit():
-            preferred_source = f"Idle_Source_{target_index}"
-            await self._refresh_scene_items_cache()
-            if preferred_source not in (self._scene_items_cache or {}):
-                await self.ensure_character_layer_sources_exist([int(target_index)])
         async with self._media_config_lock:
             if not self.mock_mode:
                 await self._refresh_scene_items_cache()
-            preferred_idle_source = self._preferred_idle_source(target_char)
-            target_idle_source = self._resolve_real_source_name(preferred_idle_source, IDLE_SOURCE_NAME)
-            LOGGER.info("[OBS] Cau hinh Video Cho (%s): %s tren Nguon %s", target_char, video_path.name, target_idle_source)
+            target_idle_source = (
+                IDLE_SOURCE_NAME
+                if self.mock_mode
+                else self._resolve_real_source_name(IDLE_SOURCE_NAME, IDLE_SOURCE_NAME)
+            )
+            LOGGER.info("[OBS] Cau hinh video nen chung: %s tren Nguon %s", video_path.name, target_idle_source)
             if self.mock_mode:
                 return
             clean_path = str(video_path.resolve()).replace("\\", "/")
@@ -1169,8 +1088,11 @@ class ObsController:
         async with self._media_config_lock:
             if not self.mock_mode:
                 await self._refresh_scene_items_cache()
-            preferred_idle_source = self._preferred_idle_source(target_char)
-            target_idle_source = self._resolve_real_source_name(preferred_idle_source, IDLE_SOURCE_NAME)
+            target_idle_source = (
+                IDLE_SOURCE_NAME
+                if self.mock_mode
+                else self._resolve_real_source_name(IDLE_SOURCE_NAME, IDLE_SOURCE_NAME)
+            )
             if self.mock_mode:
                 return
             await self._request(
@@ -1187,27 +1109,19 @@ class ObsController:
             LOGGER.info("[OBS] Da xoa Video Cho khoi %s", target_idle_source)
 
     async def sync_all_idle_videos(self) -> dict[str, list[str]]:
-        """Create missing character layers and sync every existing Idle file to OBS."""
+        """Đồng bộ một video nền duy nhất vào Idle_Source."""
         result: dict[str, list[str]] = {"synced": [], "skipped": [], "errors": []}
-        active_indices = [
-            idx for idx in range(1, CHARACTER_COUNT + 1)
-            if resolve_existing_media_path(get_idle_video_path(idx)).is_file()
-        ]
-        if not self.mock_mode:
-            await self.ensure_character_layer_sources_exist(active_indices, remove_inactive=True)
-        for idx in range(1, CHARACTER_COUNT + 1):
-            target = f"char{idx}"
-            path = resolve_existing_media_path(get_idle_video_path(idx))
-            if not path.is_file():
-                result["skipped"].append(target)
-                continue
-            try:
-                await self.set_idle_video(path, target)
-                result["synced"].append(target)
-            except Exception as exc:
-                result["errors"].append(f"{target}: {exc}")
+        path = resolve_existing_media_path(get_idle_video_path("main"))
+        if not path.is_file():
+            result["skipped"].append("main")
+            return result
+        try:
+            await self.set_idle_video(path, "main")
+            result["synced"].append("main")
+        except Exception as exc:
+            result["errors"].append(f"main: {exc}")
         LOGGER.info(
-            "[OBS] Dong bo Idle hoan tat: %s thanh cong, %s chua chon video, %s loi",
+            "[OBS] Dong bo video nen: %s thanh cong, %s chua chon video, %s loi",
             len(result["synced"]),
             len(result["skipped"]),
             len(result["errors"]),
@@ -1216,22 +1130,20 @@ class ObsController:
 
     async def stop_action(self, target_char: str = "char1") -> None:
         stop_sound_file()
-        LOGGER.info("[OBS] An action video %s (quay ve Idle)", target_char)
-        await self._set_action_visible(False, target_char=target_char)
+        LOGGER.info("[OBS] Ket thuc action, quay ve video nen")
+        await self._set_action_visible(False, target_char="main")
 
     async def update_queue_text(self, current_job: GiftJob | None, queue_items: list[GiftJob]) -> None:
         lines: list[str] = []
         if current_job:
-            ctag = CHAR_SHORT_TAGS.get(current_job.target_char, f"[{current_job.target_char}]")
-            lines.append(f"🎬 ĐANG PHÁT: {current_job.gift_name.title()} {ctag}")
+            lines.append(f"🎬 ĐANG PHÁT: {current_job.gift_name.title()}")
         else:
             lines.append("🎬 ĐANG PHÁT: (Chờ quà...)")
 
         if queue_items:
             lines.append(f"⏳ HÀNG CHỜ ({len(queue_items)}):")
             for idx, job in enumerate(queue_items[:5], 1):
-                ctag = CHAR_SHORT_TAGS.get(job.target_char, f"[{job.target_char}]")
-                lines.append(f"  {idx}. {job.gift_name.title()} {ctag}")
+                lines.append(f"  {idx}. {job.gift_name.title()}")
             if len(queue_items) > 5:
                 lines.append(f"  ... và {len(queue_items) - 5} món nữa")
         else:
@@ -1325,7 +1237,7 @@ class TikTokObsApp:
         action_target = mapping[0]
         priority = int(mapping[1])
         sound_filename = mapping[2] if len(mapping) > 2 else ""
-        target_char = str(mapping[3]) if len(mapping) > 3 else "char1"
+        target_char = "main"
 
         video_files, resolved_sound_fn, action_name = resolve_gift_action_media(action_target, sound_filename)
         media_candidates: list[tuple[str, Path]] = []
@@ -1362,7 +1274,7 @@ class TikTokObsApp:
             LOGGER.info("Them vao queue [%s]: %s -> %s (priority=%s, target=%s, sound=%s)", action_name, gift_name, resolved_path.name, priority, target_char, resolved_sound_path.name if resolved_sound_path else "None")
         await self.update_queue_display()
 
-    async def enqueue_action_preset(self, preset_id: str, target_char: str = "char1") -> bool:
+    async def enqueue_action_preset(self, preset_id: str, target_char: str = "main") -> bool:
         preset = ACTION_PRESETS.get(preset_id)
         if preset is None:
             LOGGER.error("Khong tim thay Hanh Dong: %s", preset_id)
@@ -1392,7 +1304,7 @@ class TikTokObsApp:
                 file_path=random.choice(candidates),
                 priority=1,
                 sound_path=sound_path,
-                target_char=target_char,
+                target_char="main",
             )
         )
         await self.update_queue_display()

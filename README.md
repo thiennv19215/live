@@ -4,7 +4,7 @@
 
 ## Tính năng
 - Kết nối TikTok Live & OBS WebSocket v5.
-- Dashboard giao diện đẹp mắt (Cyber Deck Style), điều khiển nút bấm Stream Deck.
+- Dashboard Cyber Deck đơn giản: một video nền chạy liên tục và Stream Deck để gọi hành động.
 - Hàng đợi FIFO: quà đến trước phát trước, quà đến sau xếp phía sau.
 - Hỗ trợ Chế độ Giả lập (Mock Mode) để thử nghiệm offline không cần OBS/TikTok.
 
@@ -24,4 +24,4 @@
 
 Mỗi `Idle_Source_N` và `Action_Source_N` nên dùng WebM VP9 có alpha hoặc MOV ProRes 4444 nền trong suốt. Background không được chứa sẵn nhân vật.
 
-Khi quà nhắm tới `char1`, ứng dụng chỉ ẩn `Idle_Source_1` và bật `Action_Source_1`; background cùng các nhân vật khác không thay đổi. Nếu OBS chưa có đủ một cặp source, ứng dụng tự dùng `Idle_Source` và `Action_Source` theo chế độ cũ.
+OBS chỉ cần hai Media Source trong scene: `Idle_Source` cho video nền lặp liên tục và `Action_Source` cho video hành động. Khi nhận quà, ứng dụng bật `Action_Source`, tạm ẩn nền, rồi tự quay lại `Idle_Source` khi hành động kết thúc.

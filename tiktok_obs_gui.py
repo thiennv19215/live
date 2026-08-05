@@ -225,7 +225,7 @@ class ToolTip:
 
 
 class GiftMappingCard(tk.Frame):
-    """Thẻ quản lý chọn file video, âm thanh, nhân vật & priority cho từng món quà."""
+    """Thẻ gán một hành động được gọi khi TikTok gửi món quà tương ứng."""
 
     def __init__(
         self,
@@ -248,7 +248,6 @@ class GiftMappingCard(tk.Frame):
 
         self.file_var = tk.StringVar(value=video_filename)
         self.sound_var = tk.StringVar(value=sound_filename)
-        self.target_char_display_var = tk.StringVar(value=get_char_display_name(target_char))
         self.prio_var = tk.StringVar(value=str(priority))
 
         # Header keeps identity and destructive actions separate from configuration.
@@ -271,12 +270,9 @@ class GiftMappingCard(tk.Frame):
         settings_row = tk.Frame(self, bg="#111c2d", padx=6, pady=4)
         settings_row.pack(fill="x", pady=(0, 5))
 
-        char_box = tk.Frame(settings_row, bg="#111c2d")
-        char_box.pack(side="left", fill="x", expand=True)
-        tk.Label(char_box, text="Nhân vật đích", font=("Segoe UI", 8), fg=TEXT_MUTED, bg="#111c2d").pack(side="left", padx=(0, 5))
-        cb_char = ttk.Combobox(char_box, values=list(CHAR_DISPLAY_MAP.values()), textvariable=self.target_char_display_var, width=14, state="readonly")
-        cb_char.pack(side="left")
-        cb_char.bind("<<ComboboxSelected>>", lambda _: self._notify_change())
+        trigger_box = tk.Frame(settings_row, bg="#111c2d")
+        trigger_box.pack(side="left", fill="x", expand=True)
+        tk.Label(trigger_box, text="⚡ Nhận quà → gọi hành động", font=("Segoe UI", 8, "bold"), fg=COLOR_EMERALD, bg="#111c2d").pack(side="left")
 
         prio_box = tk.Frame(settings_row, bg="#111c2d")
         prio_box.pack(side="right")
@@ -413,7 +409,7 @@ class GiftMappingCard(tk.Frame):
             self.on_delete(self.gift_key)
 
     def get_target_char_value(self) -> str:
-        return get_char_value_from_display(self.target_char_display_var.get())
+        return "main"
 
     def _notify_change(self) -> None:
         if self.on_choose_file:
@@ -563,8 +559,14 @@ class TikTokObsGui:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("TikTok Live Control Room v3.1 - Stream Deck Edition")
-        self.root.geometry("1440x900")
-        self.root.minsize(1180, 760)
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        window_width = min(1380, max(1120, screen_width - 40))
+        window_height = min(860, max(740, screen_height - 80))
+        pos_x = max(0, (screen_width - window_width) // 2)
+        pos_y = max(0, (screen_height - window_height) // 2)
+        self.root.geometry(f"{window_width}x{window_height}+{pos_x}+{pos_y}")
+        self.root.minsize(1120, 740)
         self.root.configure(bg=BG_DARK)
 
         self.log_queue: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -581,9 +583,6 @@ class TikTokObsGui:
         self.deck_buttons: dict[str, StreamDeckButton] = {}
         self.idle_status_labels: dict[str, tk.Label] = {}
         self.idle_video_name_vars: dict[str, tk.StringVar] = {}
-        self.idle_rows_container: tk.Frame | None = None
-        self.remove_character_button: tk.Button | None = None
-        self._remove_character_armed_until = 0.0
         self._pending_obs_operations: set[Any] = set()
 
         self.username = tk.StringVar(value=core.TIKTOK_USERNAME)
@@ -593,11 +592,10 @@ class TikTokObsGui:
         self.scene_name = tk.StringVar(value=core.SCENE_NAME)
         self.idle_source = tk.StringVar(value=core.IDLE_SOURCE_NAME)
         self.action_source = tk.StringVar(value=core.ACTION_SOURCE_NAME)
-        for idx in range(1, core.CHARACTER_COUNT + 1):
-            path = core.get_idle_video_path(idx)
-            self.idle_video_name_vars[f"char{idx}"] = tk.StringVar(
-                value=shorten_filename(core.resolve_existing_media_path(path).name, 16)
-            )
+        idle_path = core.get_idle_video_path("main")
+        self.idle_video_name_vars["main"] = tk.StringVar(
+            value=shorten_filename(core.resolve_existing_media_path(idle_path).name, 24)
+        )
 
         # Mặc định False để kết nối OBS thật khi bấm nút
         self.mock_mode_var = tk.BooleanVar(value=False)
@@ -658,7 +656,7 @@ class TikTokObsGui:
         title_box = ttk.Frame(header)
         title_box.pack(side="left")
         ttk.Label(title_box, text="TikTok Live Control Room", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(title_box, text="Visual Video Selection & Real-Time OBS Automation Suite v3.1", style="Subtitle.TLabel").pack(anchor="w")
+        ttk.Label(title_box, text="Một video nền · Quà đến là gọi hành động trên OBS", style="Subtitle.TLabel").pack(anchor="w")
 
         # Top Right Global Status Indicator
         self.sys_status_pill = StatusPill(header, text="OFFLINE", state_type="offline", width=140, height=32)
@@ -757,41 +755,41 @@ class TikTokObsGui:
         ttk.Label(u_box, text="TikTok Username (Host Live):", style="PanelMuted.TLabel").pack(anchor="w", pady=(0, 2))
         ttk.Entry(u_box, textvariable=self.username).pack(fill="x")
 
-        # Character layers use transparent idle assets above a permanent OBS background.
+        # One shared looping background keeps OBS setup and gift actions predictable.
         idle_box = tk.Frame(panel, bg=CARD_BG, highlightbackground=COLOR_CYAN, highlightthickness=1, padx=10, pady=8)
         idle_box.pack(fill="x", pady=(0, 8))
 
         idle_header = tk.Frame(idle_box, bg=CARD_BG)
         idle_header.pack(fill="x")
-        tk.Label(idle_header, text="🎭 IDLE RIÊNG TỪNG NHÂN VẬT", font=("Segoe UI", 9, "bold"), fg=COLOR_CYAN, bg=CARD_BG).pack(side="left")
-        self.remove_character_button = tk.Button(idle_header, text="−", width=3, font=("Segoe UI", 9, "bold"), bg="#334155", fg=COLOR_ROSE, relief="flat", command=self.remove_last_character)
-        self.remove_character_button.pack(side="right", padx=(3, 0))
-        tk.Button(idle_header, text="＋", width=3, font=("Segoe UI", 9, "bold"), bg=COLOR_EMERALD, fg="#042f2e", relief="flat", command=self.add_character).pack(side="right")
-        tk.Label(idle_box, text="Background để cố định trong OBS; các file NV nên là WebM nền trong suốt.", font=("Segoe UI", 7), fg=TEXT_MUTED, bg=CARD_BG, wraplength=300, justify="left").pack(anchor="w", pady=(1, 5))
+        tk.Label(idle_header, text="🎬 VIDEO NỀN ĐANG CHẠY", font=("Segoe UI", 9, "bold"), fg=COLOR_CYAN, bg=CARD_BG).pack(side="left")
+        tk.Label(idle_box, text="Một video duy nhất lặp liên tục trên Idle_Source. Khi có quà, Action_Source sẽ phát hành động rồi tự quay lại nền.", font=("Segoe UI", 8), fg=TEXT_MUTED, bg=CARD_BG, wraplength=300, justify="left").pack(anchor="w", pady=(2, 7))
 
-        self.idle_rows_container = tk.Frame(idle_box, bg=CARD_BG)
-        self.idle_rows_container.pack(fill="x")
-        self._render_idle_character_rows()
+        idle_row = tk.Frame(idle_box, bg=CARD_BG)
+        idle_row.pack(fill="x")
+        idle_path = core.get_idle_video_path("main")
+        is_ready = core.resolve_existing_media_path(idle_path).is_file()
+        status_lbl = tk.Label(idle_row, text="●" if is_ready else "!", width=2, font=("Segoe UI", 8, "bold"), fg=COLOR_EMERALD if is_ready else COLOR_ROSE, bg=CARD_BG)
+        status_lbl.pack(side="left")
+        self.idle_status_labels["main"] = status_lbl
+        tk.Label(idle_row, textvariable=self.idle_video_name_vars["main"], font=("Segoe UI", 8, "bold"), fg=COLOR_EMERALD, bg="#0d131f", padx=6, pady=5, anchor="w").pack(side="left", fill="x", expand=True, padx=(3, 5))
+        tk.Button(idle_row, text="Xóa", font=("Segoe UI", 8, "bold"), bg="#334155", fg=COLOR_ROSE, relief="flat", padx=7, pady=3, command=self.clear_idle_video, cursor="hand2").pack(side="right", padx=(0, 3))
+        tk.Button(idle_row, text="📂 Chọn", font=("Segoe UI", 8, "bold"), bg=COLOR_CYAN, fg="#083344", relief="flat", padx=7, pady=3, command=self.choose_idle_video, cursor="hand2").pack(side="right")
 
-        tk.Button(idle_box, text="Dùng 1 video chung (OBS cũ)", font=("Segoe UI", 8), bg="#1e293b", fg=TEXT_MUTED, relief="flat", command=lambda: self.choose_idle_video("main")).pack(fill="x", pady=(5, 0))
-        tk.Button(idle_box, text="⟳ CẬP NHẬT TOÀN BỘ VIDEO SANG OBS", font=("Segoe UI", 8, "bold"), bg="#164e63", fg="#cffafe", activebackground=COLOR_CYAN, activeforeground="#083344", relief="flat", pady=4, command=self.sync_all_videos_to_obs).pack(fill="x", pady=(5, 0))
+        tk.Button(idle_box, text="⟳ GỬI VIDEO NỀN SANG OBS", font=("Segoe UI", 8, "bold"), bg="#164e63", fg="#cffafe", activebackground=COLOR_CYAN, activeforeground="#083344", relief="flat", pady=5, command=self.sync_all_videos_to_obs).pack(fill="x", pady=(7, 0))
 
         # Dedicated OBS Settings & Open Folder Buttons
         btn_obs_cfg = tk.Button(panel, text="⚙ Cài Đặt Kết Nối OBS Studio", font=("Segoe UI", 9, "bold"), bg="#1e293b", fg=COLOR_CYAN, activebackground=COLOR_CYAN, activeforeground="#000", relief="flat", padx=6, pady=5, command=self.open_obs_settings_dialog)
         btn_obs_cfg.pack(fill="x", pady=(4, 4))
 
-        tk.Button(panel, text="🧩 Tạo Source Layer Nhân Vật", font=("Segoe UI", 9, "bold"), bg="#164e63", fg="#cffafe", activebackground=COLOR_CYAN, activeforeground="#000", relief="flat", padx=6, pady=5, command=self.setup_character_layers).pack(fill="x", pady=(0, 4))
-
         ttk.Button(panel, text="📁 Mở Thư Mục Videos", style="Soft.TButton", command=self.open_video_folder).pack(fill="x")
         return panel
 
     def _refresh_idle_file_statuses(self) -> None:
-        for char in core.get_character_ids():
-            path = core.get_idle_video_path(char)
-            label = self.idle_status_labels.get(char)
-            if label:
-                ready = core.resolve_existing_media_path(path).is_file()
-                label.configure(text="●" if ready else "!", fg=COLOR_EMERALD if ready else COLOR_ROSE)
+        path = core.get_idle_video_path("main")
+        label = self.idle_status_labels.get("main")
+        if label:
+            ready = core.resolve_existing_media_path(path).is_file()
+            label.configure(text="●" if ready else "!", fg=COLOR_EMERALD if ready else COLOR_ROSE)
 
     def _render_idle_character_rows(self) -> None:
         if self.idle_rows_container is None:
@@ -854,53 +852,51 @@ class TikTokObsGui:
 
         future.add_done_callback(_done)
 
-    def clear_idle_video(self, target_char: str) -> None:
-        idx = int(target_char.removeprefix("char"))
-        core.set_idle_video_path(idx, core.VIDEO_DIRECTORY / f"__unassigned_idle_{idx}__.mp4")
-        self.idle_video_name_vars[target_char].set("(Chưa chọn video)")
+    def clear_idle_video(self) -> None:
+        core.set_idle_video_path("main", core.VIDEO_DIRECTORY / "__unassigned_idle__.mp4")
+        self.idle_video_name_vars["main"].set("(Chưa chọn video nền)")
         self._persist_runtime_config()
-        label = self.idle_status_labels.get(target_char)
+        label = self.idle_status_labels.get("main")
         if label:
             label.configure(text="!", fg=COLOR_ROSE)
         if self.app and self.run_loop and self.app.obs.is_connected and not self.app.mock_mode:
             def _keep_cleared_status(_: Any) -> None:
-                current_label = self.idle_status_labels.get(target_char)
+                current_label = self.idle_status_labels.get("main")
                 if current_label:
                     current_label.configure(text="!", fg=COLOR_ROSE)
 
             self._submit_obs_operation(
-                f"xóa video và source OBS của NV{idx}",
-                self.app.obs.remove_character_layer(idx),
+                "xóa video nền khỏi Idle_Source",
+                self.app.obs.clear_idle_video("main"),
                 on_success=_keep_cleared_status,
-                status_char=target_char,
+                status_char="main",
             )
-        logging.getLogger(__name__).info("Đã bỏ gán Video Chờ của Nhân vật %s", idx)
+        logging.getLogger(__name__).info("Đã bỏ gán video nền chung")
 
     def sync_all_videos_to_obs(self) -> None:
-        if not self.app or not self.run_loop or not self.app.obs.is_connected or self.app.mock_mode:
-            self.status_text.set("CHƯA KẾT NỐI OBS - KHÔNG THỂ ĐỒNG BỘ")
-            logging.getLogger(__name__).warning("Hãy kết nối OBS thật trước khi đồng bộ toàn bộ video")
+        if not self.app or not self.run_loop:
+            self.status_text.set("HÃY BẤM BẮT ĐẦU KẾT NỐI TRƯỚC")
+            logging.getLogger(__name__).warning("Hệ thống chưa chạy; chưa thể gửi video nền sang OBS")
             return
-        for label in self.idle_status_labels.values():
-            label.configure(text="…", fg=COLOR_AMBER)
-        self.status_text.set("ĐANG ĐỒNG BỘ VIDEO SANG OBS...")
+        if self.app.mock_mode:
+            self.status_text.set("MOCK MODE KHÔNG GỬI VIDEO SANG OBS THẬT")
+            return
+        self.idle_status_labels["main"].configure(text="…", fg=COLOR_AMBER)
+        self.status_text.set("ĐANG KẾT NỐI VÀ GỬI VIDEO NỀN SANG OBS...")
+
+        async def _connect_and_sync() -> dict[str, list[str]]:
+            if not self.app.obs.is_connected:
+                await self.app.obs.connect()
+            return await self.app.obs.sync_all_idle_videos()
 
         def _sync_done(result: dict[str, list[str]]) -> None:
-            synced = set(result["synced"])
-            skipped = set(result["skipped"])
-            error_chars = {item.split(":", 1)[0] for item in result["errors"]}
-            for char, label in self.idle_status_labels.items():
-                if char in synced:
-                    label.configure(text="●", fg=COLOR_EMERALD)
-                elif char in skipped or char in error_chars:
-                    label.configure(text="!", fg=COLOR_ROSE)
-            self.status_text.set(
-                f"OBS ĐÃ NHẬN {len(synced)} VIDEO | BỎ QUA {len(skipped)} Ô TRỐNG | LỖI {len(result['errors'])}"
-            )
+            synced = bool(result["synced"])
+            self.idle_status_labels["main"].configure(text="●" if synced else "!", fg=COLOR_EMERALD if synced else COLOR_ROSE)
+            self.status_text.set("VIDEO NỀN ĐÃ CHẠY TRÊN OBS" if synced else "CHƯA CÓ VIDEO NỀN HỢP LỆ")
             logging.getLogger(__name__).info(
-                "Đồng bộ toàn bộ OBS: %s thành công, %s ô chưa chọn video, %s lỗi",
-                len(synced),
-                len(skipped),
+                "Đồng bộ video nền OBS: %s thành công, %s chưa chọn, %s lỗi",
+                len(result["synced"]),
+                len(result["skipped"]),
                 len(result["errors"]),
             )
 
@@ -910,8 +906,8 @@ class TikTokObsGui:
             logging.getLogger(__name__).error("Không thể đồng bộ toàn bộ video sang OBS: %s", exc)
 
         self._submit_obs_operation(
-            "đồng bộ toàn bộ video Idle",
-            self.app.obs.sync_all_idle_videos(),
+            "kết nối và đồng bộ video nền chung",
+            _connect_and_sync(),
             on_success=_sync_done,
             on_error=_sync_failed,
         )
@@ -1073,41 +1069,25 @@ class TikTokObsGui:
         tk.Button(btn_box, text="✔ LƯU CẤU HÌNH OBS", font=("Segoe UI", 10, "bold"), bg=COLOR_EMERALD, fg="#042f2e", relief="flat", padx=12, pady=6, command=_save_obs).pack(side="right")
         tk.Button(btn_box, text="Hủy", font=("Segoe UI", 9), bg="#334155", fg="#fff", relief="flat", padx=10, pady=6, command=dlg.destroy).pack(side="right", padx=(0, 6))
 
-    def choose_idle_video(self, target_char: str = "char1") -> None:
-        char_label = "Nền Chung" if target_char == "main" else get_char_display_name(target_char)
+    def choose_idle_video(self) -> None:
         filename = filedialog.askopenfilename(
             parent=self.root,
-            title=f"Chọn Video Chờ (Idle Loop) cho {char_label}",
+            title="Chọn video nền chạy liên tục",
             filetypes=[("Media Files", "*.mp4 *.mov *.mkv *.webm *.png *.jpg *.jpeg *.webp"), ("All files", "*.*")],
         )
         if filename:
             path = Path(filename)
-            if target_char == "main":
-                short_n = shorten_filename(path.name, 16)
-                for char in core.get_character_ids():
-                    core.set_idle_video_path(char, path)
-                    self.idle_video_name_vars[char].set(short_n)
-            else:
-                core.set_idle_video_path(target_char, path)
-                self.idle_video_name_vars[target_char].set(shorten_filename(path.name, 16))
-
+            core.set_idle_video_path("main", path)
+            self.idle_video_name_vars["main"].set(shorten_filename(path.name, 24))
             self._persist_runtime_config()
             self._refresh_idle_file_statuses()
-            logging.getLogger(__name__).info("Đã chọn Video Chờ mới cho %s: %s", char_label, path.name)
+            logging.getLogger(__name__).info("Đã chọn video nền chung: %s", path.name)
             if self.app and self.run_loop and self.app.obs.is_connected:
-                if target_char == "main":
-                    for c in (*core.get_character_ids(), "main"):
-                        self._submit_obs_operation(
-                            f"gán {path.name} cho {get_char_display_name(c) if c != 'main' else 'Idle chung'}",
-                            self.app.obs.set_idle_video(path, c),
-                            status_char=c if c != "main" else None,
-                        )
-                else:
-                    self._submit_obs_operation(
-                        f"gán {path.name} cho {get_char_display_name(target_char)}",
-                        self.app.obs.set_idle_video(path, target_char),
-                        status_char=target_char,
-                    )
+                self._submit_obs_operation(
+                    f"gán {path.name} cho Idle_Source",
+                    self.app.obs.set_idle_video(path, "main"),
+                    status_char="main",
+                )
         with contextlib.suppress(Exception):
             self.root.lift()
             self.root.focus_force()
@@ -1180,8 +1160,8 @@ class TikTokObsGui:
         ttk.Button(automation, text="Rose → Lion FIFO", style="Soft.TButton", command=self.run_e2e_interrupt_test).pack(side="right", padx=4)
 
         # 4 Interactive Stream Deck Buttons
-        deck_grid = tk.Frame(panel, bg=PANEL_BG)
-        deck_grid.pack(fill="x")
+        self.deck_grid = tk.Frame(panel, bg=PANEL_BG)
+        self.deck_grid.pack(fill="x")
 
         buttons_data = [
             ("🌹", "Rose", COLOR_ROSE, "rose"),
@@ -1197,14 +1177,14 @@ class TikTokObsGui:
                 prio = mapped[1]
                 sound_fn = mapped[2] if len(mapped) > 2 else ""
                 sound_icon = " 🔊" if sound_fn else ""
-                sub = f"Prio: {prio} | {shorten_filename(fn, 14)}{sound_icon}"
+                sub = f"Mức {prio} · {shorten_filename(fn, 14)}{sound_icon}"
             else:
                 sub = "Priority: --"
 
-            btn = StreamDeckButton(deck_grid, emoji, title, sub, color, command=lambda g=gift_key: self.test_gift(g))
+            btn = StreamDeckButton(self.deck_grid, emoji, title, sub, color, command=lambda g=gift_key: self.test_gift(g))
             row, col = divmod(index, 2)
             btn.grid(row=row, column=col, sticky="ew", padx=(0 if col == 0 else 4, 4 if col == 0 else 0), pady=(0, 4 if row == 0 else 0))
-            deck_grid.columnconfigure(col, weight=1, uniform="deck")
+            self.deck_grid.columnconfigure(col, weight=1, uniform="deck")
             self.deck_buttons[gift_key] = btn
 
         return panel
@@ -1322,12 +1302,9 @@ class TikTokObsGui:
         top_f.pack(fill="x")
         tk.Label(top_f, text="⚡ QUẢN LÝ KHO HÀNH ĐỘNG (ACTION PRESETS)", font=("Segoe UI", 12, "bold"), fg=COLOR_CYAN, bg="#0f172a").pack(side="left")
 
-        preview_target_var = tk.StringVar(value=get_char_display_name("char1"))
         preview_box = tk.Frame(dlg, bg="#0f172a", padx=16)
         preview_box.pack(fill="x", pady=(0, 8))
-        tk.Label(preview_box, text="Xem thử trên:", font=("Segoe UI", 8, "bold"), fg=TEXT_MUTED, bg="#0f172a").pack(side="left")
-        ttk.Combobox(preview_box, values=list(CHAR_DISPLAY_MAP.values()), textvariable=preview_target_var, width=20, state="readonly").pack(side="left", padx=8)
-        tk.Label(preview_box, text="Mỗi thẻ hiển thị video, âm thanh và có thể phát thử ngay.", font=("Segoe UI", 8), fg=TEXT_MUTED, bg="#0f172a").pack(side="left", padx=8)
+        tk.Label(preview_box, text="Mỗi hành động được phát trên Action_Source dùng chung và tự quay lại video nền.", font=("Segoe UI", 8), fg=TEXT_MUTED, bg="#0f172a").pack(side="left")
 
         def _add_new_preset() -> None:
             new_dlg = tk.Toplevel(dlg)
@@ -1416,9 +1393,8 @@ class TikTokObsGui:
                     if not self.app or not self.run_loop:
                         messagebox.showwarning("Chưa chạy hệ thống", "Hãy bấm Bắt đầu trước khi xem thử hành động.", parent=dlg)
                         return
-                    target = get_char_value_from_display(preview_target_var.get())
                     future = asyncio.run_coroutine_threadsafe(
-                        self.app.enqueue_action_preset(target_aid, target),
+                        self.app.enqueue_action_preset(target_aid, "main"),
                         self.run_loop,
                     )
 
@@ -1457,7 +1433,7 @@ class TikTokObsGui:
     def prompt_add_new_gift(self) -> None:
         dlg = tk.Toplevel(self.root)
         dlg.title("➕ Thêm Món Quà Mới")
-        dlg.geometry("460x390")
+        dlg.geometry("460x350")
         dlg.resizable(False, False)
         dlg.configure(bg="#0f172a")
         dlg.transient(self.root)
@@ -1479,14 +1455,6 @@ class TikTokObsGui:
         prio_var = tk.StringVar(value="1")
         spn_prio = tk.Spinbox(prio_frame, from_=1, to=10, textvariable=prio_var, width=4, bg="#182335", fg="#fff", buttonbackground="#1e293b", relief="flat")
         spn_prio.pack(side="left", padx=8)
-
-        # Target Character Selector
-        char_sel_frame = tk.Frame(form, bg="#0f172a")
-        char_sel_frame.pack(fill="x", pady=(6, 0))
-        tk.Label(char_sel_frame, text="Áp dụng cho Nhân vật:", font=("Segoe UI", 9), fg=TEXT_MUTED, bg="#0f172a").pack(side="left")
-        target_char_display_var = tk.StringVar(value=get_char_display_name("char1"))
-        cb_target_char = ttk.Combobox(char_sel_frame, values=list(CHAR_DISPLAY_MAP.values()), textvariable=target_char_display_var, width=18, state="readonly")
-        cb_target_char.pack(side="left", padx=8)
 
         # File Media
         file_path_var = tk.StringVar(value="")
@@ -1563,14 +1531,12 @@ class TikTokObsGui:
             if s_fn:
                 sound_mapped_val = get_media_mapping_value(s_fn)
 
-            target_char = get_char_value_from_display(target_char_display_var.get())
-
-            core.GIFT_MAPPING[key] = (mapped_val, prio, sound_mapped_val, target_char)
+            core.GIFT_MAPPING[key] = (mapped_val, prio, sound_mapped_val, "main")
             core.save_gift_mapping(core.GIFT_MAPPING)
 
             self._refresh_cards_container()
             self._refresh_stream_deck_grid()
-            logging.getLogger(__name__).info("➕ Đã thêm món quà mới: '%s' -> %s (Priority %s, Target: %s, Sound: %s)", key.title(), path.name, prio, get_char_display_name(target_char), sound_mapped_val or "Không")
+            logging.getLogger(__name__).info("➕ Đã thêm món quà mới: '%s' -> %s (Mức %s, Sound: %s)", key.title(), path.name, prio, sound_mapped_val or "Không")
             dlg.destroy()
 
         tk.Button(btn_box, text="✔ XÁC NHẬN THÊM", font=("Segoe UI", 10, "bold"), bg=COLOR_EMERALD, fg="#042f2e", relief="flat", padx=12, pady=6, command=_confirm).pack(side="right")
@@ -1594,10 +1560,10 @@ class TikTokObsGui:
         self.deck_buttons.clear()
 
         buttons_data = [
-            ("🌹", "Rose (Hoa Hồng - NV 1)", COLOR_ROSE, "rose"),
-            ("🍩", "Doughnut (Bánh - NV 2)", COLOR_AMBER, "doughnut"),
-            ("♪", "TikTok (Nhảy - NV 3)", COLOR_CYAN, "tiktok"),
-            ("🦁", "Lion (Sư Tử - Tất Cả)", COLOR_PURPLE, "lion"),
+            ("🌹", "Rose", COLOR_ROSE, "rose"),
+            ("🍩", "Doughnut", COLOR_AMBER, "doughnut"),
+            ("♪", "TikTok", COLOR_CYAN, "tiktok"),
+            ("🦁", "Lion", COLOR_PURPLE, "lion"),
         ]
         for gift in core.GIFT_MAPPING.keys():
             if gift not in [b[3] for b in buttons_data]:
@@ -1611,9 +1577,7 @@ class TikTokObsGui:
                 fn = mapped[0]
                 prio = mapped[1]
                 sound_fn = mapped[2] if len(mapped) > 2 else ""
-                target_char = mapped[3] if len(mapped) > 3 else "char1"
                 sound_icon = " 🔊" if sound_fn else ""
-                char_tag = f" {core.CHAR_SHORT_TAGS.get(target_char, '[NV 1]')}"
                 vids, sound_fn, action_name = core.resolve_gift_action_media(fn, sound_fn)
                 if len(vids) > 1:
                     first_n = Path(vids[0]).name
@@ -1622,7 +1586,7 @@ class TikTokObsGui:
                     fn_display = shorten_filename(Path(vids[0]).name, 12)
                 else:
                     fn_display = shorten_filename(action_name, 12)
-                sub = f"Prio: {prio}{char_tag} | {fn_display}{sound_icon}"
+                sub = f"Mức {prio} · {fn_display}{sound_icon}"
             else:
                 sub = "Priority: --"
 
@@ -1631,8 +1595,8 @@ class TikTokObsGui:
             self.deck_grid.columnconfigure(col, weight=1)
             self.deck_buttons[gift_key] = btn
 
-    def update_card_mapping(self, gift_key: str, filename: str, priority: int, sound_filename: str = "", target_char: str = "char1") -> None:
-        core.GIFT_MAPPING[gift_key] = (filename, priority, sound_filename, target_char)
+    def update_card_mapping(self, gift_key: str, filename: str, priority: int, sound_filename: str = "", target_char: str = "main") -> None:
+        core.GIFT_MAPPING[gift_key] = (filename, priority, sound_filename, "main")
         core.save_gift_mapping(core.GIFT_MAPPING)
         vids, sound_filename, action_name = core.resolve_gift_action_media(filename, sound_filename)
         if len(vids) > 1:
@@ -1643,10 +1607,9 @@ class TikTokObsGui:
         else:
             fn_display = shorten_filename(action_name, 12)
         sound_icon = " 🔊" if sound_filename else ""
-        char_tag = f" {core.CHAR_SHORT_TAGS.get(target_char, '[NV 1]')}"
         if gift_key in self.deck_buttons:
-            self.deck_buttons[gift_key].set_subtitle(f"Prio: {priority}{char_tag} | {fn_display}{sound_icon}")
-        logging.getLogger(__name__).info("Đã cập nhật quà %s: %s (Priority %s, Target: %s, Sound: %s)", gift_key.title(), fn_display, priority, get_char_display_name(target_char), sound_filename or "Không")
+            self.deck_buttons[gift_key].set_subtitle(f"Mức {priority} · {fn_display}{sound_icon}")
+        logging.getLogger(__name__).info("Đã cập nhật quà %s: %s (Mức %s, Sound: %s)", gift_key.title(), fn_display, priority, sound_filename or "Không")
 
     def _build_log_console(self, parent: ttk.Frame) -> ttk.Frame:
         panel = ttk.Frame(parent, style="Panel.TFrame", padding=8)
@@ -1681,11 +1644,8 @@ class TikTokObsGui:
             port = int(self.obs_port.get())
         except ValueError:
             port = core.OBS_PORT
-        assigned_paths = {
-            str(idx): str(path)
-            for idx, path in core.IDLE_VIDEO_PATHS.items()
-            if idx <= core.CHARACTER_COUNT and core.resolve_existing_media_path(path).is_file()
-        }
+        idle_path = core.get_idle_video_path("main")
+        assigned_paths = {"1": str(idle_path)} if core.resolve_existing_media_path(idle_path).is_file() else {}
         config = {
             "tiktok_username": self.username.get().strip().lstrip("@") or "mock_user",
             "obs_host": self.obs_host.get().strip(),
@@ -1694,12 +1654,11 @@ class TikTokObsGui:
             "scene_name": self.scene_name.get().strip(),
             "idle_source_name": self.idle_source.get().strip(),
             "action_source_name": self.action_source.get().strip(),
-            "character_count": core.CHARACTER_COUNT,
+            "character_count": 1,
             "idle_video_paths": assigned_paths,
         }
-        for idx in range(1, 5):
-            if str(idx) in assigned_paths:
-                config[f"idle_video_path_{idx}"] = assigned_paths[str(idx)]
+        if "1" in assigned_paths:
+            config["idle_video_path_1"] = assigned_paths["1"]
         core.save_obs_config(config)
 
     def _apply_config(self) -> bool:
@@ -1840,8 +1799,7 @@ class TikTokObsGui:
             filename = card.file_var.get().strip()
             prio = card.get_priority()
             sound_filename = card.sound_var.get().strip()
-            target_char = card.get_target_char_value()
-            core.GIFT_MAPPING[gift] = (filename, prio, sound_filename, target_char)
+            core.GIFT_MAPPING[gift] = (filename, prio, sound_filename, "main")
             vids, sound_filename, action_name = core.resolve_gift_action_media(filename, sound_filename)
             if len(vids) > 1:
                 first_n = Path(vids[0]).name
@@ -1851,9 +1809,8 @@ class TikTokObsGui:
             else:
                 fn_display = shorten_filename(action_name, 12)
             sound_icon = " 🔊" if sound_filename else ""
-            char_tag = f" {core.CHAR_SHORT_TAGS.get(target_char, '[NV 1]')}"
             if gift in self.deck_buttons:
-                self.deck_buttons[gift].set_subtitle(f"Prio: {prio}{char_tag} | {fn_display}{sound_icon}")
+                self.deck_buttons[gift].set_subtitle(f"Mức {prio} · {fn_display}{sound_icon}")
         core.save_gift_mapping(core.GIFT_MAPPING)
         logging.getLogger(__name__).info("Đã cập nhật toàn bộ Gift Mapping Cards Matrix")
 

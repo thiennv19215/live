@@ -94,13 +94,13 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         job = await self.app.queue.get()
         self.assertIn(job.file_path.name, [Path(v).name for v in preset.videos])
 
-    async def test_action_preset_can_be_previewed_for_selected_character(self) -> None:
+    async def test_action_preset_preview_uses_shared_action_source(self) -> None:
         preset_id = next(iter(core.ACTION_PRESETS))
         with patch.object(core, "resolve_existing_media_path", return_value=Path(__file__)):
             queued = await self.app.enqueue_action_preset(preset_id, "char3")
         self.assertTrue(queued)
         job = await self.app.queue.get()
-        self.assertEqual(job.target_char, "char3")
+        self.assertEqual(job.target_char, "main")
 
     async def test_sound_file_execution(self) -> None:
         """Kiểm tra GiftJob hỗ trợ đường dẫn sound_path."""
@@ -115,31 +115,20 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
             await app.enqueue_gift("missing_test")
         self.assertEqual(len(app.queue), 0)
 
-    async def test_multi_character_routing(self) -> None:
-        """Kiểm tra định tuyến Nguồn OBS theo Nhân vật (char1, char2, char3, all)."""
-        idle1, act1 = self.app.obs._get_sources_for_target("char1")
-        self.assertEqual((idle1, act1), ("Idle_Source_1", "Action_Source_1"))
+    async def test_all_targets_route_to_shared_sources(self) -> None:
+        """Mọi quà đều dùng chung một cặp Idle_Source/Action_Source."""
+        expected = (core.IDLE_SOURCE_NAME, core.ACTION_SOURCE_NAME)
+        for target in ("main", "char1", "char2", "char3", "all"):
+            self.assertEqual(self.app.obs._get_sources_for_target(target), expected)
 
-        idle2, act2 = self.app.obs._get_sources_for_target("char2")
-        self.assertEqual((idle2, act2), ("Idle_Source_2", "Action_Source_2"))
-
-        idle3, act3 = self.app.obs._get_sources_for_target("char3")
-        self.assertEqual((idle3, act3), ("Idle_Source_3", "Action_Source_3"))
-
-        idle4, act4 = self.app.obs._get_sources_for_target("char4")
-        self.assertEqual((idle4, act4), ("Idle_Source_4", "Action_Source_4"))
-
-        idle_all, act_all = self.app.obs._get_sources_for_target("all")
-        self.assertEqual((idle_all, act_all), (core.IDLE_SOURCE_NAME, "Action_Source_All"))
-
-    async def test_dynamic_character_routing_supports_added_character(self) -> None:
+    async def test_legacy_character_target_still_routes_to_shared_sources(self) -> None:
         original_count = core.CHARACTER_COUNT
         try:
             core.set_character_count(6)
             obs = core.ObsController(mock_mode=True)
             self.assertEqual(
                 obs._get_sources_for_target("char6"),
-                ("Idle_Source_6", "Action_Source_6"),
+                (core.IDLE_SOURCE_NAME, core.ACTION_SOURCE_NAME),
             )
             self.assertIn("char6", core.get_character_ids())
             self.assertEqual(core.CHAR_SHORT_TAGS["char6"], "[NV 6]")
@@ -170,27 +159,24 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(removed_ids, [51, 52])
 
-    async def test_sync_all_idle_videos_only_sends_existing_files(self) -> None:
+    async def test_sync_idle_video_only_sends_shared_background(self) -> None:
         original_count = core.CHARACTER_COUNT
         original_paths = dict(core.IDLE_VIDEO_PATHS)
         try:
             core.set_character_count(3)
             core.IDLE_VIDEO_PATHS[1] = Path(__file__)
-            core.IDLE_VIDEO_PATHS[2] = Path(__file__)
-            core.IDLE_VIDEO_PATHS[3] = Path("missing-idle-video.mp4")
             obs = core.ObsController(mock_mode=False)
             obs._client = object()
             obs.is_connected = True
             with (
-                patch.object(obs, "ensure_character_layer_sources_exist", new=AsyncMock()),
                 patch.object(obs, "set_idle_video", new=AsyncMock()) as set_idle,
             ):
                 result = await obs.sync_all_idle_videos()
 
-            self.assertEqual(result["synced"], ["char1", "char2"])
-            self.assertEqual(result["skipped"], ["char3"])
+            self.assertEqual(result["synced"], ["main"])
+            self.assertEqual(result["skipped"], [])
             self.assertEqual(result["errors"], [])
-            self.assertEqual(set_idle.await_count, 2)
+            set_idle.assert_awaited_once_with(Path(__file__), "main")
         finally:
             core.IDLE_VIDEO_PATHS.clear()
             core.IDLE_VIDEO_PATHS.update(original_paths)
@@ -223,19 +209,57 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
             (core.IDLE_SOURCE_NAME, core.ACTION_SOURCE_NAME),
         )
 
+    async def test_default_source_existing_globally_is_added_to_selected_scene(self) -> None:
+        """Source có sẵn trong OBS nhưng thiếu ở scene hiện tại phải được gắn lại."""
+        obs = core.ObsController(mock_mode=False)
+        obs._client = object()
+        obs.existing_inputs = [core.IDLE_SOURCE_NAME, core.ACTION_SOURCE_NAME]
+        obs._scene_items_cache = {core.IDLE_SOURCE_NAME: 1}
+
+        async def refresh() -> dict[str, int]:
+            return obs._scene_items_cache or {}
+
+        async def request(method_name: str, **kwargs: object) -> None:
+            if method_name == "create_scene_item":
+                obs._scene_items_cache[core.ACTION_SOURCE_NAME] = 2
+
+        with (
+            patch.object(obs, "_refresh_scene_items_cache", side_effect=refresh),
+            patch.object(obs, "_request", side_effect=request) as mocked_request,
+        ):
+            await obs.ensure_default_sources_exist()
+
+        create_call = next(
+            call for call in mocked_request.await_args_list
+            if call.args and call.args[0] == "create_scene_item"
+        )
+        self.assertEqual(create_call.kwargs["scene_name"], core.SCENE_NAME)
+        self.assertEqual(create_call.kwargs["source_name"], core.ACTION_SOURCE_NAME)
+        self.assertFalse(create_call.kwargs["enabled"])
+
     async def test_idle_video_configuration(self) -> None:
         """Kiểm tra cấu hình Video Chờ (Idle Loop Video)."""
         test_path = Path("custom_idle_video.mp4")
         await self.app.obs.set_idle_video(test_path)
         self.assertTrue(self.app.obs.mock_mode)
 
-    async def test_idle_video_targets_numbered_source_without_cached_scene_pair(self) -> None:
+    async def test_shared_background_path_can_be_replaced(self) -> None:
+        original_path = core.get_idle_video_path("main")
+        replacement = Path("replacement-background.mp4")
+        try:
+            core.set_idle_video_path("main", replacement)
+            self.assertEqual(core.get_idle_video_path("main"), replacement)
+            self.assertEqual(core.IDLE_VIDEO_PATH, replacement)
+        finally:
+            core.set_idle_video_path("main", original_path)
+
+    async def test_idle_video_always_targets_shared_source(self) -> None:
         obs = core.ObsController(mock_mode=False)
         obs._client = object()
         obs.is_connected = True
 
         async def refresh() -> dict[str, int]:
-            obs.existing_inputs = [core.IDLE_SOURCE_NAME, "Idle_Source_2"]
+            obs.existing_inputs = [core.IDLE_SOURCE_NAME]
             obs._scene_items_cache = {core.IDLE_SOURCE_NAME: 1}
             return obs._scene_items_cache
 
@@ -250,7 +274,7 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
             call for call in request.await_args_list
             if call.args and call.args[0] == "set_input_settings"
         )
-        self.assertEqual(settings_call.kwargs["name"], "Idle_Source_2")
+        self.assertEqual(settings_call.kwargs["name"], core.IDLE_SOURCE_NAME)
 
     async def test_idle_video_readback_mismatch_is_reported(self) -> None:
         obs = core.ObsController(mock_mode=False)
@@ -261,8 +285,8 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
             input_settings = {"local_file": "C:/wrong-file.mp4"}
 
         async def refresh() -> dict[str, int]:
-            obs.existing_inputs = ["Idle_Source_1"]
-            obs._scene_items_cache = {"Idle_Source_1": 1}
+            obs.existing_inputs = [core.IDLE_SOURCE_NAME]
+            obs._scene_items_cache = {core.IDLE_SOURCE_NAME: 1}
             return obs._scene_items_cache
 
         async def request(method_name: str, **kwargs: object) -> object:
@@ -285,8 +309,8 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
             input_settings = {"local_file": "", "file": ""}
 
         async def refresh() -> dict[str, int]:
-            obs.existing_inputs = ["Idle_Source_1"]
-            obs._scene_items_cache = {"Idle_Source_1": 1}
+            obs.existing_inputs = [core.IDLE_SOURCE_NAME]
+            obs._scene_items_cache = {core.IDLE_SOURCE_NAME: 1}
             return obs._scene_items_cache
 
         async def request(method_name: str, **kwargs: object) -> object:
@@ -455,25 +479,21 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(app.queue), 0)
         reset_display.assert_awaited_once()
 
-    async def test_layered_mode_swaps_only_target_character(self) -> None:
-        """Kiểm tra action chỉ thay idle của đúng nhân vật được chọn."""
+    async def test_shared_action_temporarily_replaces_background(self) -> None:
+        """Kích hoạt action sẽ ẩn nền chung, rồi khôi phục nền khi kết thúc."""
         obs = core.ObsController(mock_mode=False)
         obs._client = object()
         obs.is_connected = True
-        obs.existing_inputs = ["Idle_Source_1", "Action_Source_1", "Idle_Source_2", "Action_Source_2"]
+        obs.existing_inputs = [core.IDLE_SOURCE_NAME, core.ACTION_SOURCE_NAME]
         obs._scene_items_cache = {
-            "Idle_Source_1": 11,
-            "Action_Source_1": 12,
-            "Idle_Source_2": 21,
-            "Action_Source_2": 22,
+            core.IDLE_SOURCE_NAME: 11,
+            core.ACTION_SOURCE_NAME: 12,
         }
         obs._scene_item_indices = {
-            "Idle_Source_1": 1,
-            "Action_Source_1": 2,
-            "Idle_Source_2": 3,
-            "Action_Source_2": 4,
+            core.IDLE_SOURCE_NAME: 1,
+            core.ACTION_SOURCE_NAME: 2,
         }
-        obs._scene_item_count = 5
+        obs._scene_item_count = 3
 
         with (
             patch.object(obs, "_request", new=AsyncMock()) as request,
@@ -493,11 +513,76 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertIn((11, True), visibility_calls)
         self.assertIn((12, True), visibility_calls)
         self.assertIn((12, False), visibility_calls)
-        self.assertNotIn((21, False), visibility_calls)
-        self.assertNotIn((22, True), visibility_calls)
+        action_off_index = visibility_calls.index((12, False))
+        idle_return_index = len(visibility_calls) - 1 - visibility_calls[::-1].index((11, True))
+        self.assertLess(action_off_index, idle_return_index)
         self.assertIn("set_scene_item_index", requested_methods)
+        self.assertNotIn("set_scene_item_transform", requested_methods)
         self.assertNotIn("trigger_studio_mode_transition", requested_methods)
 
+    async def test_action_is_preloaded_behind_idle_before_reveal(self) -> None:
+        obs = core.ObsController(mock_mode=False)
+        obs._client = object()
+        obs.is_connected = True
+        obs._scene_items_cache = {
+            core.IDLE_SOURCE_NAME: 11,
+            core.ACTION_SOURCE_NAME: 12,
+        }
+        obs._scene_item_indices = {
+            core.IDLE_SOURCE_NAME: 1,
+            core.ACTION_SOURCE_NAME: 2,
+        }
+        obs._scene_item_count = 3
+
+        class PlayingStatus:
+            media_state = "OBS_MEDIA_STATE_PLAYING"
+
+        async def request(method_name: str, **kwargs: object) -> object:
+            return PlayingStatus() if method_name == "get_media_input_status" else None
+
+        with patch.object(obs, "_request", side_effect=request) as mocked_request:
+            ready = await obs._preload_action_source()
+
+        self.assertTrue(ready)
+        index_call = next(
+            call for call in mocked_request.await_args_list
+            if call.args and call.args[0] == "set_scene_item_index"
+        )
+        self.assertEqual(index_call.kwargs["item_index"], 0)
+        restart_calls = [
+            call for call in mocked_request.await_args_list
+            if call.args
+            and call.args[0] == "trigger_media_input_action"
+            and call.kwargs.get("action") == "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"
+        ]
+        self.assertEqual(len(restart_calls), 1)
+
+    async def test_revealing_preloaded_action_does_not_restart_decoder(self) -> None:
+        obs = core.ObsController(mock_mode=False)
+        obs._client = object()
+        obs.is_connected = True
+        obs._scene_items_cache = {
+            core.IDLE_SOURCE_NAME: 11,
+            core.ACTION_SOURCE_NAME: 12,
+        }
+        obs._scene_item_indices = {
+            core.IDLE_SOURCE_NAME: 1,
+            core.ACTION_SOURCE_NAME: 0,
+        }
+        obs._scene_item_count = 2
+
+        with patch.object(obs, "_request", new=AsyncMock()) as request:
+            await obs._set_action_visible(True, "main", restart_media=False)
+
+        restart_calls = [
+            call for call in request.await_args_list
+            if call.args
+            and call.args[0] == "trigger_media_input_action"
+            and call.kwargs.get("action") == "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART"
+        ]
+        self.assertEqual(restart_calls, [])
+
+    @unittest.skip("Chế độ layer nhiều nhân vật đã được thay bằng một video nền chung")
     async def test_reset_uses_numbered_videos_without_legacy_overlay(self) -> None:
         """Layered mode disables the shared idle source so Video 1 stays visible."""
         obs = core.ObsController(mock_mode=False)
@@ -530,6 +615,7 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertIn((11, True), visibility_calls)
         self.assertIn((21, True), visibility_calls)
 
+    @unittest.skip("Chế độ layer nhiều nhân vật đã được thay bằng một video nền chung")
     async def test_starting_numbered_video_disables_stale_legacy_idle(self) -> None:
         """A Video 1 donation cannot be covered by the old shared source."""
         obs = core.ObsController(mock_mode=False)
@@ -578,6 +664,7 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(len(restart_calls), 1)
 
+    @unittest.skip("Chế độ layer nhiều nhân vật đã được thay bằng một video nền chung")
     async def test_legacy_fallback_restores_numbered_layers_without_shared_idle(self) -> None:
         """An incomplete target can use the shared action without corrupting layered idle state."""
         obs = core.ObsController(mock_mode=False)
@@ -624,6 +711,7 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertIn((11, True), visibility_calls)
         self.assertNotIn((21, True), visibility_calls)
 
+    @unittest.skip("Chế độ layer nhiều nhân vật đã được thay bằng một video nền chung")
     async def test_all_target_ignores_incomplete_numbered_idle_sources(self) -> None:
         """The all action only hides and restores complete character layers."""
         obs = core.ObsController(mock_mode=False)
