@@ -21,10 +21,9 @@ Luu y ve thu vien:
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import contextlib
 import ctypes
-import heapq
-import itertools
 import logging
 import os
 import random
@@ -37,6 +36,8 @@ from typing import Any
 from TikTokLive import TikTokLiveClient
 from TikTokLive.events import ConnectEvent, DisconnectEvent, GiftEvent
 from obsws_python import ReqClient
+from obsws_python.error import OBSSDKTimeoutError
+from websocket import WebSocketConnectionClosedException, WebSocketTimeoutException
 
 
 # ============================== Cau hinh ===============================
@@ -100,6 +101,11 @@ OBS_PASSWORD = str(_saved_obs_cfg.get("obs_password", OBS_PASSWORD))
 SCENE_NAME = str(_saved_obs_cfg.get("scene_name", SCENE_NAME))
 IDLE_SOURCE_NAME = str(_saved_obs_cfg.get("idle_source_name", IDLE_SOURCE_NAME))
 ACTION_SOURCE_NAME = str(_saved_obs_cfg.get("action_source_name", ACTION_SOURCE_NAME))
+IDLE_VIDEO_PATH_1 = Path(str(_saved_obs_cfg.get("idle_video_path_1", IDLE_VIDEO_PATH_1)))
+IDLE_VIDEO_PATH_2 = Path(str(_saved_obs_cfg.get("idle_video_path_2", IDLE_VIDEO_PATH_2)))
+IDLE_VIDEO_PATH_3 = Path(str(_saved_obs_cfg.get("idle_video_path_3", IDLE_VIDEO_PATH_3)))
+IDLE_VIDEO_PATH_4 = Path(str(_saved_obs_cfg.get("idle_video_path_4", IDLE_VIDEO_PATH_4)))
+IDLE_VIDEO_PATH = IDLE_VIDEO_PATH_1
 
 QUEUE_TEXT_SOURCE_NAME = "Queue_Text_Source"
 ENABLE_QUEUE_TEXT_SOURCE = False  # Đặt False nếu chỉ muốn OBS phát Video hiệu ứng khi có quà, không hiện Text Hàng chờ
@@ -373,41 +379,39 @@ class GiftJob:
 
 
 class PriorityGiftQueue:
-    """Bao ngoai bang heap de uu tien cao hon duoc xu ly truoc."""
+    """Hang doi FIFO: qua den truoc duoc xu ly truoc."""
 
     def __init__(self) -> None:
-        self._heap: list[tuple[int, int, GiftJob]] = []
-        self._sequence = itertools.count()
+        self._items: deque[GiftJob] = deque()
         self._condition = asyncio.Condition()
         self._unfinished_tasks = 0
 
     async def put(self, job: GiftJob) -> None:
         async with self._condition:
-            heapq.heappush(self._heap, (-job.priority, next(self._sequence), job))
+            self._items.append(job)
             self._unfinished_tasks += 1
             self._condition.notify()
 
     async def get(self) -> GiftJob:
         async with self._condition:
-            await self._condition.wait_for(lambda: len(self._heap) > 0)
-            _, _, job = heapq.heappop(self._heap)
-            return job
+            await self._condition.wait_for(lambda: len(self._items) > 0)
+            return self._items.popleft()
 
     def task_done(self) -> None:
         if self._unfinished_tasks > 0:
             self._unfinished_tasks -= 1
 
     def clear(self) -> int:
-        count = len(self._heap)
-        self._heap.clear()
+        count = len(self._items)
+        self._items.clear()
         self._unfinished_tasks = 0
         return count
 
     def get_items(self) -> list[GiftJob]:
-        return [item[2] for item in sorted(self._heap)]
+        return list(self._items)
 
     def __len__(self) -> int:
-        return len(self._heap)
+        return len(self._items)
 
 
 class ObsController:
@@ -418,10 +422,18 @@ class ObsController:
         self._client: ReqClient | None = None
         self._action_scene_item_id: int | None = None
         self._idle_scene_item_id: int | None = None
+        self._scene_items_cache: dict[str, int] | None = None
+        self._scene_item_count = 0
+        self._scene_item_indices: dict[str, int] = {}
+        self.existing_inputs: list[str] = []
         self._lock = asyncio.Lock()
+        self._display_lock = asyncio.Lock()
+        self._connection_generation = 0
+        self._connecting = False
+        self._looping_action_sources: set[str] = set()
         self.is_connected: bool = False
 
-    async def connect(self) -> None:
+    async def connect(self, reset_display: bool = True) -> None:
         async with self._lock:
             if self.is_connected:
                 return
@@ -429,23 +441,22 @@ class ObsController:
                 self.is_connected = True
                 LOGGER.info("Da kich hoat Che Do Gia Lap OBS (Mock Mode)")
                 return
-
-            self._client = await asyncio.to_thread(
-                ReqClient,
-                host=OBS_HOST,
-                port=OBS_PORT,
-                password=OBS_PASSWORD,
-                timeout=2,
-            )
-            self.is_connected = True
-            LOGGER.info("Da ket noi OBS WebSocket v5 tai %s:%s", OBS_HOST, OBS_PORT)
-
+            self._connecting = True
             try:
-                # 1. Tu dong nhan dien Scene hien tai trong OBS Studio
+                self._client = await asyncio.to_thread(
+                    ReqClient,
+                    host=OBS_HOST,
+                    port=OBS_PORT,
+                    password=OBS_PASSWORD,
+                    timeout=2,
+                )
                 scene_list_resp = await asyncio.to_thread(self._client.get_scene_list)
                 available_scenes = [sc["sceneName"] for sc in scene_list_resp.scenes]
+                if not available_scenes:
+                    raise RuntimeError("OBS khong co Scene nao de phat media")
+
                 global SCENE_NAME
-                if SCENE_NAME not in available_scenes and available_scenes:
+                if SCENE_NAME not in available_scenes:
                     try:
                         current_scene_resp = await asyncio.to_thread(self._client.get_current_program_scene)
                         curr_name = current_scene_resp.current_program_scene_name
@@ -454,12 +465,46 @@ class ObsController:
                         SCENE_NAME = available_scenes[0]
                     LOGGER.info("Tu dong chon Scene dang mo trong OBS: '%s'", SCENE_NAME)
 
-                # 2. Cập nhật cache và đảm bảo 2 Nguồn mặc định (Idle_Source & Action_Source) tồn tại trong OBS
                 await self.ensure_default_sources_exist()
-                # 3. Dọn dẹp dữ liệu cũ trên OBS: Ẩn tất cả Action Source cũ và bật lại Video Nền sạch
-                await self.reset_obs_display_state()
+                await self._validate_obs_setup()
+
+                self._connection_generation += 1
+                self.is_connected = True
+                LOGGER.info("Da ket noi va xac minh OBS WebSocket v5 tai %s:%s", OBS_HOST, OBS_PORT)
+
+                layer_pairs = [
+                    idx for idx in range(1, 5)
+                    if f"Idle_Source_{idx}" in (self._scene_items_cache or {})
+                    and f"Action_Source_{idx}" in (self._scene_items_cache or {})
+                ]
+                if layer_pairs:
+                    LOGGER.info("[OBS] Che do Layer Nhan Vat san sang cho NV: %s", ", ".join(map(str, layer_pairs)))
+                else:
+                    LOGGER.info("[OBS] Dang dung che do Legacy. Tao Idle_Source_1..4 va Action_Source_1..4 de bat layer rieng.")
             except Exception as exc:
-                LOGGER.warning("Auto-setup OBS Media Sources: %s", exc)
+                self.is_connected = False
+                client, self._client = self._client, None
+                if client is not None:
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(client.disconnect)
+                LOGGER.error("OBS chua san sang: %s", exc)
+                raise ConnectionError(f"Khong the xac minh Scene/Source OBS: {exc}") from exc
+            finally:
+                self._connecting = False
+
+        # Run requests after releasing _lock so their reconnect path can call connect().
+        if reset_display:
+            await self.reset_obs_display_state()
+
+    async def _validate_obs_setup(self) -> None:
+        await self._refresh_scene_items_cache()
+        scene_items = self._scene_items_cache or {}
+        missing = [
+            name for name in (IDLE_SOURCE_NAME, ACTION_SOURCE_NAME)
+            if name not in self.existing_inputs or name not in scene_items
+        ]
+        if missing:
+            raise RuntimeError("Thieu Media Source bat buoc trong Scene '%s': %s" % (SCENE_NAME, ", ".join(missing)))
 
     async def reset_obs_display_state(self) -> None:
         """Dọn dẹp sạch toàn bộ hiển thị OBS khi khởi động/kết nối lại: Ẩn Action sources, Bật Idle sources."""
@@ -528,68 +573,137 @@ class ObsController:
         except Exception as exc:
             LOGGER.debug("ensure_default_sources_exist exception: %s", exc)
 
+    async def ensure_character_layer_sources_exist(self) -> list[str]:
+        """Create or attach the OBS media sources required by layered character mode."""
+        if self.mock_mode or not self._client:
+            return []
+
+        await self._refresh_scene_items_cache()
+        created: list[str] = []
+        source_specs = []
+        for idx in range(1, 5):
+            source_specs.append((f"Idle_Source_{idx}", True))
+            source_specs.append((f"Action_Source_{idx}", False))
+        source_specs.append(("Action_Source_All", False))
+
+        for source_name, enabled in source_specs:
+            if source_name in (self._scene_items_cache or {}):
+                continue
+            try:
+                if source_name in self.existing_inputs:
+                    await self._request(
+                        "create_scene_item",
+                        scene_name=SCENE_NAME,
+                        source_name=source_name,
+                        enabled=enabled,
+                    )
+                else:
+                    await self._request(
+                        "create_input",
+                        sceneName=SCENE_NAME,
+                        inputName=source_name,
+                        inputKind="ffmpeg_source",
+                        inputSettings={},
+                        sceneItemEnabled=enabled,
+                    )
+                created.append(source_name)
+            except Exception as exc:
+                LOGGER.warning("Khong the tao source layer %s: %s", source_name, exc)
+
+        await self._refresh_scene_items_cache()
+        await self.reset_obs_display_state()
+        LOGGER.info("[OBS] Da san sang source layer nhan vat; tao/gan moi: %s", ", ".join(created) or "khong co")
+        return created
+
     async def _refresh_scene_items_cache(self) -> dict[str, int]:
         if self.mock_mode or not self._client:
             return {}
 
         inputs_list = []
-        try:
-            input_list_resp = await asyncio.to_thread(self._client.get_input_list)
-            raw_inputs = getattr(input_list_resp, "inputs", [])
-            for inp in raw_inputs:
-                name = inp.get("inputName") or inp.get("input_name") if isinstance(inp, dict) else (getattr(inp, "input_name", None) or getattr(inp, "inputName", None))
-                if name:
-                    inputs_list.append(str(name))
-        except Exception as exc:
-            LOGGER.debug("Loi get_input_list: %s", exc)
+        input_list_resp = await self._request("get_input_list")
+        raw_inputs = getattr(input_list_resp, "inputs", [])
+        for inp in raw_inputs:
+            name = inp.get("inputName") or inp.get("input_name") if isinstance(inp, dict) else (getattr(inp, "input_name", None) or getattr(inp, "inputName", None))
+            if name:
+                inputs_list.append(str(name))
 
         self.existing_inputs = inputs_list
 
         cache: dict[str, int] = {}
-        try:
-            resp = await asyncio.to_thread(self._client.get_scene_item_list, SCENE_NAME)
-            raw_items = getattr(resp, "scene_items", []) or getattr(resp, "sceneItems", [])
-            for item in raw_items:
-                if isinstance(item, dict):
-                    s_name = item.get("sourceName") or item.get("source_name")
-                    s_id = item.get("sceneItemId") or item.get("scene_item_id")
-                else:
-                    s_name = getattr(item, "source_name", None) or getattr(item, "sourceName", None)
-                    s_id = getattr(item, "scene_item_id", None) or getattr(item, "sceneItemId", None)
-                if s_name and s_id is not None:
-                    cache[str(s_name)] = int(s_id)
-        except Exception as exc:
-            LOGGER.debug("Loi get_scene_item_list: %s", exc)
+        resp = await self._request("get_scene_item_list", name=SCENE_NAME)
+        raw_items = getattr(resp, "scene_items", []) or getattr(resp, "sceneItems", [])
+        self._scene_item_count = len(raw_items)
+        indices: dict[str, int] = {}
+        for item in raw_items:
+            if isinstance(item, dict):
+                s_name = item.get("sourceName") or item.get("source_name")
+                s_id = item.get("sceneItemId") or item.get("scene_item_id")
+                s_index = item.get("sceneItemIndex")
+                if s_index is None:
+                    s_index = item.get("scene_item_index")
+            else:
+                s_name = getattr(item, "source_name", None) or getattr(item, "sourceName", None)
+                s_id = getattr(item, "scene_item_id", None) or getattr(item, "sceneItemId", None)
+                s_index = getattr(item, "scene_item_index", None)
+                if s_index is None:
+                    s_index = getattr(item, "sceneItemIndex", None)
+            if s_name and s_id is not None:
+                cache[str(s_name)] = int(s_id)
+                if s_index is not None:
+                    indices[str(s_name)] = int(s_index)
 
         self._scene_items_cache = cache
+        self._scene_item_indices = indices
         return cache
 
     async def close(self) -> None:
         async with self._lock:
-            self.is_connected = False
-            if self._client is not None and not self.mock_mode:
-                with contextlib.suppress(Exception):
-                    await asyncio.to_thread(self._client.disconnect)
-            self._client = None
-            self._action_scene_item_id = None
-            self._idle_scene_item_id = None
-            self._scene_items_cache = None
+            await self._drop_connection()
+
+    async def _drop_connection(self) -> None:
+        """Disconnect without taking _lock so request recovery cannot self-deadlock."""
+        self.is_connected = False
+        if self._client is not None and not self.mock_mode:
+            with contextlib.suppress(Exception):
+                await asyncio.to_thread(self._client.disconnect)
+        self._client = None
+        self._action_scene_item_id = None
+        self._idle_scene_item_id = None
+        self._scene_items_cache = None
+        self._scene_item_count = 0
+        self._scene_item_indices = {}
+        self.existing_inputs = []
 
     async def _request(self, method_name: str, **kwargs: Any) -> Any:
         if self.mock_mode:
             return True
         for attempt in range(2):
             try:
-                await self.connect()
+                # connect() runs OBS setup while holding its lock. Calling it again
+                # from that setup would deadlock, so reuse the live client directly.
+                if self._client is None:
+                    await self.connect(reset_display=False)
                 client = self._client
                 if client is None:
                     raise ConnectionError("OBS client chua san sang")
                 return await asyncio.to_thread(getattr(client, method_name), **kwargs)
-            except Exception as exc:
-                LOGGER.warning("OBS request %s loi: %s", method_name, exc)
-                await self.close()
+            except (
+                ConnectionError,
+                OSError,
+                EOFError,
+                OBSSDKTimeoutError,
+                WebSocketConnectionClosedException,
+                WebSocketTimeoutException,
+            ) as exc:
+                LOGGER.warning("OBS socket loi %s: %s", method_name, exc)
+                await self._drop_connection()
+                if self._connecting:
+                    raise ConnectionError(f"Mat ket noi OBS khi dang xac minh: {method_name}") from exc
                 if attempt == 0:
                     await asyncio.sleep(OBS_RECONNECT_DELAY)
+            except Exception as exc:
+                LOGGER.debug("OBS request %s API info: %s", method_name, exc)
+                raise
         raise ConnectionError(f"Khong the gui request OBS: {method_name}")
 
     async def _get_scene_item_id(self, source_name: str) -> int | None:
@@ -597,66 +711,101 @@ class ObsController:
             return 1
         if not hasattr(self, "_scene_items_cache") or self._scene_items_cache is None:
             await self._refresh_scene_items_cache()
-        return self._scene_items_cache.get(source_name) if self._scene_items_cache else None
+        item_id = self._scene_items_cache.get(source_name) if self._scene_items_cache else None
+        if item_id is None:
+            # Source may have been added after the previous cache refresh.
+            await self._refresh_scene_items_cache()
+            item_id = self._scene_items_cache.get(source_name) if self._scene_items_cache else None
+        return item_id
 
     def _get_sources_for_target(self, target_char: str = "char1") -> tuple[str, str]:
         target = str(target_char).lower().strip()
         idx_map = {"char1": "1", "1": "1", "char2": "2", "2": "2", "char3": "3", "3": "3", "char4": "4", "4": "4"}
-        inputs = getattr(self, "existing_inputs", [])
         if target in idx_map:
             idx = idx_map[target]
             idle_candidate = f"Idle_Source_{idx}"
             action_candidate = f"Action_Source_{idx}"
-            if self.mock_mode or not inputs or (idle_candidate in inputs or action_candidate in inputs):
+            scene_items = self._scene_items_cache or {}
+            if self.mock_mode or (idle_candidate in scene_items and action_candidate in scene_items):
                 return (idle_candidate, action_candidate)
             return (IDLE_SOURCE_NAME, ACTION_SOURCE_NAME)
-        elif target == "all":
-            if self.mock_mode or not inputs or ("Action_Source_All" in inputs):
-                return ("Action_Source_All", "Action_Source_All")
-            return (ACTION_SOURCE_NAME, ACTION_SOURCE_NAME)
+        if target == "all":
+            scene_items = self._scene_items_cache or {}
+            action_name = "Action_Source_All" if self.mock_mode or "Action_Source_All" in scene_items else ACTION_SOURCE_NAME
+            return (IDLE_SOURCE_NAME, action_name)
         return (IDLE_SOURCE_NAME, ACTION_SOURCE_NAME)
 
+    async def _move_action_above_idle(self, action_name: str, idle_names: list[str]) -> None:
+        action_item_id = await self._get_scene_item_id(action_name)
+        if action_item_id is None or self.mock_mode or self._scene_item_count <= 0:
+            return
+        idle_indices = [self._scene_item_indices[name] for name in idle_names if name in self._scene_item_indices]
+        target_index = min(self._scene_item_count - 1, max(idle_indices) + 1) if idle_indices else self._scene_item_count - 1
+        with contextlib.suppress(Exception):
+            await self._request(
+                "set_scene_item_index",
+                scene_name=SCENE_NAME,
+                item_id=action_item_id,
+                item_index=target_index,
+            )
+
     async def _set_action_visible(self, visible: bool, target_char: str = "char1") -> None:
+        """Apply a complete display state, replaying it if a request reconnects mid-sequence."""
+        async with self._display_lock:
+            for _ in range(3):
+                generation = self._connection_generation
+                await self._set_action_visible_once(visible, target_char)
+                if self._connection_generation == generation:
+                    return
+                LOGGER.info("[OBS] Ket noi lai giua luc doi source; ap dung lai toan bo trang thai")
+            raise ConnectionError("OBS lien tuc reconnect khi dang doi Action/Idle; khong the xac lap trang thai an toan")
+
+    async def _set_action_visible_once(self, visible: bool, target_char: str = "char1") -> None:
         if self.mock_mode:
-            LOGGER.info("[MOCK OBS] Target %s: Set action visible = %s, idle visible = %s", target_char, visible, not visible)
+            LOGGER.info("[MOCK OBS] Target %s: Set action visible = %s", target_char, visible)
             return
 
         target_norm = str(target_char).lower().strip()
         if target_norm == "all":
-            action_item_id = await self._get_scene_item_id("Action_Source_All") or await self._get_scene_item_id(ACTION_SOURCE_NAME)
-            target_action_source = "Action_Source_All" if (await self._get_scene_item_id("Action_Source_All")) is not None else ACTION_SOURCE_NAME
-            idle_sources = [f"Idle_Source_{i}" for i in range(1, 5)] + [IDLE_SOURCE_NAME]
+            scene_items = self._scene_items_cache or {}
+            layered_idle_sources = [f"Idle_Source_{i}" for i in range(1, 5) if f"Idle_Source_{i}" in scene_items]
+            layered = "Action_Source_All" in scene_items and bool(layered_idle_sources)
+            target_action_source = "Action_Source_All" if layered else ACTION_SOURCE_NAME
+            action_item_id = await self._get_scene_item_id(target_action_source)
+            idle_sources = layered_idle_sources if layered else [IDLE_SOURCE_NAME]
 
             if visible:
+                await self._move_action_above_idle(target_action_source, idle_sources)
                 if action_item_id is not None:
                     await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=action_item_id, enabled=True)
+                with contextlib.suppress(Exception):
+                    await self._request("trigger_media_input_action", name=target_action_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
+                await asyncio.sleep(0.08)
                 for isrc in idle_sources:
                     iid = await self._get_scene_item_id(isrc)
                     if iid is not None:
                         with contextlib.suppress(Exception):
                             await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=iid, enabled=False)
-                with contextlib.suppress(Exception):
-                    await self._request("trigger_media_input_action", name=target_action_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
             else:
-                if action_item_id is not None:
-                    await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=action_item_id, enabled=False)
-                with contextlib.suppress(Exception):
-                    await self._request("trigger_media_input_action", name=target_action_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
                 for isrc in idle_sources:
                     iid = await self._get_scene_item_id(isrc)
                     if iid is not None:
                         with contextlib.suppress(Exception):
                             await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=iid, enabled=True)
-                            await self._request("trigger_media_input_action", name=isrc, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
+                            await self._request("trigger_media_input_action", name=isrc, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY")
+                await asyncio.sleep(0.12 if layered else 0.35)
+                if action_item_id is not None:
+                    await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=action_item_id, enabled=False)
+                with contextlib.suppress(Exception):
+                    await self._request("trigger_media_input_action", name=target_action_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
         else:
             idle_name, action_name = self._get_sources_for_target(target_char)
-            action_item_id = await self._get_scene_item_id(action_name) or await self._get_scene_item_id(ACTION_SOURCE_NAME)
-            idle_item_id = await self._get_scene_item_id(idle_name) or await self._get_scene_item_id(IDLE_SOURCE_NAME)
-            target_action_source = action_name if (await self._get_scene_item_id(action_name)) is not None else ACTION_SOURCE_NAME
-            target_idle_source = idle_name if (await self._get_scene_item_id(idle_name)) is not None else IDLE_SOURCE_NAME
+            action_item_id = await self._get_scene_item_id(action_name)
+            idle_item_id = await self._get_scene_item_id(idle_name)
+            layered = idle_name.startswith("Idle_Source_") and action_name.startswith("Action_Source_")
 
             if visible:
-                # 1. Bật Action Video và cho phát ngay ở lớp trên (Overlapping Layer)
+                await self._move_action_above_idle(action_name, [idle_name])
                 if action_item_id is not None:
                     await self._request(
                         "set_scene_item_enabled",
@@ -665,21 +814,16 @@ class ObsController:
                         enabled=True,
                     )
                 with contextlib.suppress(Exception):
-                    await self._request("trigger_media_input_action", name=target_action_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
-
-                # Chờ 100ms để OBS decoder nạp frame 1 của Action Video đè lên màn hình
-                await asyncio.sleep(0.1)
-
-                # 2. Sau khi Action Video đã che màn hình, mới ân Nguồn Video Nền Idle (Triệt tiêu 100% chớp nháy)
-                idle_candidates = [target_idle_source, idle_name, IDLE_SOURCE_NAME] + [f"Idle_Source_{i}" for i in range(1, 5)]
-                for isrc in idle_candidates:
-                    iid = await self._get_scene_item_id(isrc)
-                    if iid is not None:
-                        with contextlib.suppress(Exception):
-                            await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=iid, enabled=False)
-                            await self._request("trigger_media_input_action", name=isrc, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PAUSE")
+                    await self._request("trigger_media_input_action", name=action_name, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
+                await asyncio.sleep(0.08)
+                if idle_item_id is not None:
+                    await self._request(
+                        "set_scene_item_enabled",
+                        scene_name=SCENE_NAME,
+                        item_id=idle_item_id,
+                        enabled=False,
+                    )
             else:
-                # 1. Bật Video Nền Idle lên trước ở phía dưới
                 if idle_item_id is not None:
                     await self._request(
                         "set_scene_item_enabled",
@@ -688,12 +832,8 @@ class ObsController:
                         enabled=True,
                     )
                     with contextlib.suppress(Exception):
-                        await self._request("trigger_media_input_action", name=target_idle_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
-
-                # Chờ 100ms để Nguồn Video Nền sẵn sàng render frame bên dưới
-                await asyncio.sleep(0.1)
-
-                # 2. Tắt Action Video sau khi Video Nền đã hiển thị sẵn sàng
+                        await self._request("trigger_media_input_action", name=idle_name, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY")
+                await asyncio.sleep(0.12 if layered else 0.35)
                 if action_item_id is not None:
                     await self._request(
                         "set_scene_item_enabled",
@@ -702,29 +842,29 @@ class ObsController:
                         enabled=False,
                     )
                 with contextlib.suppress(Exception):
-                    await self._request("trigger_media_input_action", name=target_action_source, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
-
-        # Studio Mode
-        with contextlib.suppress(Exception):
-            sm_resp = await self._request("get_studio_mode_enabled")
-            if getattr(sm_resp, "studio_mode_enabled", False):
-                await self._request("trigger_studio_mode_transition")
-                LOGGER.info("[OBS Studio Mode] Tu dong Transition tu Preview sang Program")
+                    await self._request("trigger_media_input_action", name=action_name, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
 
     def _resolve_real_source_name(self, preferred_name: str, fallback_default: str) -> str:
         inputs = getattr(self, "existing_inputs", [])
-        if not inputs or self.mock_mode:
+        if self.mock_mode:
             return preferred_name or fallback_default
         if preferred_name in inputs:
             return preferred_name
         if fallback_default in inputs:
             return fallback_default
-        return inputs[0]
+        raise RuntimeError(
+            "Khong tim thay OBS Media Source '%s' hoac '%s'; huy thao tac de tranh ghi nham source"
+            % (preferred_name, fallback_default)
+        )
 
     async def play_action(self, video_path: Path, sound_path: Path | None = None, target_char: str = "char1") -> None:
         video_path = resolve_existing_media_path(video_path)
         if not self.mock_mode and not video_path.is_file():
             LOGGER.warning("Chua tim thay file video/anh: %s", video_path)
+
+        if not self.mock_mode:
+            # OBS assigns a new scene-item ID when a source is deleted/recreated.
+            await self._refresh_scene_items_cache()
 
         idle_name, action_name = self._get_sources_for_target(target_char)
         target_action_source = self._resolve_real_source_name(action_name, ACTION_SOURCE_NAME)
@@ -736,24 +876,65 @@ class ObsController:
         if not self.mock_mode and video_path.is_file():
             clean_path = str(video_path.resolve()).replace("\\", "/")
             is_image = video_path.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".webp")
-            with contextlib.suppress(Exception):
-                await self._request(
-                    "set_input_settings",
-                    name=target_action_source,
-                    settings={
-                        "local_file": clean_path,
-                        "file": clean_path,
-                        "restart_on_activate": True,
-                        "is_local_file": True,
-                        "clear_on_media_end": False,
-                        "looping": is_image,
-                    },
-                    overlay=True,
-                )
+            if is_image:
+                self._looping_action_sources.add(target_action_source)
+            else:
+                self._looping_action_sources.discard(target_action_source)
+            await self._request(
+                "set_input_settings",
+                name=target_action_source,
+                settings={
+                    "local_file": clean_path,
+                    "file": clean_path,
+                    "restart_on_activate": True,
+                    "is_local_file": True,
+                    "clear_on_media_end": False,
+                    "looping": is_image,
+                },
+                overlay=True,
+            )
         await self._set_action_visible(True, target_char=target_char)
+
+    async def wait_for_action_end(self, target_char: str, fallback_duration: float) -> None:
+        """Poll OBS playback state, using duration only as a bounded fallback."""
+        if self.mock_mode:
+            await asyncio.sleep(fallback_duration)
+            return
+
+        _, action_name = self._get_sources_for_target(target_char)
+        target_action_source = self._resolve_real_source_name(action_name, ACTION_SOURCE_NAME)
+        if target_action_source in self._looping_action_sources:
+            await asyncio.sleep(fallback_duration)
+            return
+
+        timeout = max(fallback_duration + 5.0, fallback_duration * 1.5)
+        deadline = asyncio.get_running_loop().time() + timeout
+        saw_active_state = False
+        active_states = {"OBS_MEDIA_STATE_OPENING", "OBS_MEDIA_STATE_BUFFERING", "OBS_MEDIA_STATE_PLAYING", "OBS_MEDIA_STATE_PAUSED"}
+        terminal_states = {"OBS_MEDIA_STATE_ENDED", "OBS_MEDIA_STATE_STOPPED", "OBS_MEDIA_STATE_ERROR"}
+
+        while asyncio.get_running_loop().time() < deadline:
+            try:
+                status = await self._request("get_media_input_status", name=target_action_source)
+                media_state = str(getattr(status, "media_state", "")).upper()
+            except Exception as exc:
+                LOGGER.warning("[OBS] Khong doc duoc trang thai media %s: %s; dung duration fallback", target_action_source, exc)
+                await asyncio.sleep(fallback_duration)
+                return
+
+            if media_state in active_states:
+                saw_active_state = True
+            elif saw_active_state and media_state in terminal_states:
+                LOGGER.info("[OBS] Media da ket thuc (%s): %s", media_state, target_action_source)
+                return
+            await asyncio.sleep(0.15)
+
+        LOGGER.warning("[OBS] Media %s khong vao trang thai ket thuc sau %.1fs; dung watchdog timeout", target_action_source, timeout)
 
     async def set_idle_video(self, video_path: Path, target_char: str = "char1") -> None:
         video_path = resolve_existing_media_path(video_path)
+        if not self.mock_mode:
+            await self._refresh_scene_items_cache()
         idle_name, _ = self._get_sources_for_target(target_char)
         target_idle_source = self._resolve_real_source_name(idle_name, IDLE_SOURCE_NAME)
         LOGGER.info("[OBS] Cau hinh Video Cho (%s): %s tren Nguon %s", target_char, video_path.name, target_idle_source)
@@ -770,6 +951,8 @@ class ObsController:
                         "is_local_file": True,
                         "clear_on_media_end": False,
                         "looping": True,
+                        "restart_on_activate": False,
+                        "close_when_inactive": False,
                     },
                     overlay=True,
                 )
@@ -875,7 +1058,7 @@ class TikTokObsApp:
         await self.enqueue_gift(gift_name)
 
     async def enqueue_gift(self, gift_name: str) -> None:
-        """Them mot gift vao queue theo thu tu uu tien; khong ngat video dang phat."""
+        """Them gift vao cuoi queue FIFO; khong ngat video dang phat."""
         gift_name = gift_name.strip().lower()
         mapping = GIFT_MAPPING.get(gift_name)
         if mapping is None:
@@ -888,14 +1071,23 @@ class TikTokObsApp:
         target_char = str(mapping[3]) if len(mapping) > 3 else "char1"
 
         video_files, resolved_sound_fn, action_name = resolve_gift_action_media(action_target, sound_filename)
-        filename = random.choice([v for v in video_files if v]) if video_files else ""
+        media_candidates: list[tuple[str, Path]] = []
+        for candidate in video_files:
+            if not candidate:
+                continue
+            candidate_path = Path(candidate)
+            video_path = candidate_path if candidate_path.is_absolute() else (VIDEO_DIRECTORY / candidate)
+            media_candidates.append((candidate, resolve_existing_media_path(video_path)))
 
-        p = Path(filename)
-        video_path = p if p.is_absolute() else (VIDEO_DIRECTORY / filename)
-        resolved_path = resolve_existing_media_path(video_path)
-
-        if not resolved_path.is_file():
-            LOGGER.warning("⚠️ CHÚ Ý: File media cho quà '%s' chưa tồn tại trên ổ đĩa: %s", gift_name, video_path)
+        existing_candidates = [(name, path) for name, path in media_candidates if path.is_file()]
+        if existing_candidates:
+            filename, resolved_path = random.choice(existing_candidates)
+        elif self.mock_mode and media_candidates:
+            filename, resolved_path = random.choice(media_candidates)
+        else:
+            missing_files = ", ".join(str(path) for _, path in media_candidates) or "(chưa cấu hình)"
+            LOGGER.error("Không thể phát quà '%s': không tìm thấy file media: %s", gift_name, missing_files)
+            return
 
         resolved_sound_path: Path | None = None
         if resolved_sound_fn:
@@ -934,16 +1126,18 @@ class TikTokObsApp:
 
         try:
             await self.obs.play_action(job.file_path, sound_path=job.sound_path, target_char=job.target_char)
-            sleep_task = asyncio.create_task(asyncio.sleep(self.current_job_duration))
+            playback_task = asyncio.create_task(
+                self.obs.wait_for_action_end(job.target_char, self.current_job_duration)
+            )
             interrupt_task = asyncio.create_task(interrupt.wait())
             done, pending = await asyncio.wait(
-                {sleep_task, interrupt_task},
+                {playback_task, interrupt_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:
                 task.cancel()
             if interrupt_task in done:
-                LOGGER.info("Video %s bi ngat boi qua uu tien cao", job.gift_name)
+                LOGGER.info("Video %s da bi bo qua theo yeu cau nguoi dung", job.gift_name)
         finally:
             stop_sound_file()
             self._current_interrupt = None
@@ -1007,9 +1201,17 @@ class TikTokObsApp:
             await self.tiktok_loop()
         finally:
             self._stop_event.set()
+            self.skip_current()
             worker_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await worker_task
+            cleared = self.queue.clear()
+            if cleared:
+                LOGGER.info("Da xoa %s mon con lai trong hang cho khi dong app", cleared)
+            with contextlib.suppress(Exception):
+                await self.obs.update_queue_text(None, [])
+            with contextlib.suppress(Exception):
+                await self.obs.reset_obs_display_state()
             await self.obs.close()
 
 
@@ -1027,4 +1229,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
-
