@@ -991,17 +991,18 @@ class TikTokObsApp:
     async def run(self) -> None:
         try:
             await self.obs.connect()
-            await self.obs.set_idle_video(IDLE_VIDEO_PATH_1, "char1")
-            await self.obs.set_idle_video(IDLE_VIDEO_PATH_2, "char2")
-            await self.obs.set_idle_video(IDLE_VIDEO_PATH_3, "char3")
-            await self.obs.set_idle_video(IDLE_VIDEO_PATH_4, "char4")
+            with contextlib.suppress(Exception):
+                await self.obs.set_idle_video(IDLE_VIDEO_PATH_1, "char1")
+                await self.obs.set_idle_video(IDLE_VIDEO_PATH_2, "char2")
+                await self.obs.set_idle_video(IDLE_VIDEO_PATH_3, "char3")
+                await self.obs.set_idle_video(IDLE_VIDEO_PATH_4, "char4")
             await self.update_queue_display()
         except Exception as exc:
-            LOGGER.error("Khong the ket noi OBS: %s", exc)
-            if not self.mock_mode:
-                raise
+            LOGGER.error("Auto-setup OBS khi khoi dong: %s", exc)
 
         worker_task = asyncio.create_task(self.worker())
+        LOGGER.info("Tien trinh xu ly Hang Cho (Worker Task) da san sang hoat dong!")
+
         try:
             await self.tiktok_loop()
         finally:
