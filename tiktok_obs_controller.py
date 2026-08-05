@@ -816,9 +816,9 @@ class ObsController:
 
 
 def get_video_duration(video_path: Path) -> float:
-    """Lay duration bang ffprobe; neu la file anh hoac khong co ffprobe thi fallback 3.0s/10.0s."""
+    """Lay duration bang ffprobe; neu file khong ton tai thi fallback 0.5s de khong nghien hang cho."""
     if not video_path.is_file():
-        return ACTION_DEFAULT_DURATION
+        return 0.5
 
     if video_path.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".webp"):
         return 3.0
