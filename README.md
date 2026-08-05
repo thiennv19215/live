@@ -1,5 +1,11 @@
 # TikTok Live OBS Controller & Dashboard
 
+## React + Electron Control Room (khuyến dùng)
+
+Mở `dist/TikTokLiveStudio.exe`. Electron tự chạy `TikTokLiveBackend.exe` ẩn ở phía sau, vì vậy mọi thao tác cấu hình, test quà, queue và mở output đều nằm trong giao diện React mới. Khi cần nguồn cho TikTok Studio, bấm `Mở output` rồi chọn cửa sổ `TikTok Live Output`.
+
+`TikTokObsControl.exe` (Tkinter) vẫn được giữ làm bản dự phòng trong giai đoạn chuyển đổi.
+
 ## Dedicated Electron output
 
 1. Choose an aspect ratio in `OUTPUT EXE - TIKTOK STUDIO` (`9:16` is recommended for vertical live video).

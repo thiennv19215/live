@@ -1,0 +1,102 @@
+import json
+import threading
+import unittest
+from types import SimpleNamespace
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
+
+from tiktok_backend import BackendApiServer
+
+
+class FakeRuntime:
+    def __init__(self) -> None:
+        self.started = None
+        self.saved_items = None
+        self.log_handler = SimpleNamespace(snapshot=lambda after: [{"id": after + 1, "message": "ready"}])
+
+    def status(self):
+        return {"running": bool(self.started), "overlay_url": "http://127.0.0.1:8765/overlay"}
+
+    def config(self):
+        return {"output_ratio": "9:16"}
+
+    def mappings(self):
+        return [{"gift": "rose", "action": "rose.mp4", "priority": 1, "sound": ""}]
+
+    def start_system(self, payload):
+        self.started = payload
+
+    def stop_system(self):
+        self.started = None
+
+    def enqueue_gift(self, gift):
+        self.gift = gift
+
+    def skip(self):
+        self.skipped = True
+
+    def clear_queue(self):
+        return 2
+
+    def update_config(self, payload):
+        return payload
+
+    def save_mappings(self, items):
+        self.saved_items = items
+        return items
+
+    def set_idle_video(self, path):
+        return path
+
+
+class TestBackendApi(unittest.TestCase):
+    def setUp(self) -> None:
+        self.runtime = FakeRuntime()
+        self.server = BackendApiServer(("127.0.0.1", 0), self.runtime)
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.base_url = f"http://127.0.0.1:{self.server.server_port}"
+
+    def tearDown(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    def get_json(self, path):
+        with urlopen(self.base_url + path, timeout=2) as response:
+            return json.load(response)
+
+    def post_json(self, path, payload):
+        request = Request(
+            self.base_url + path,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=2) as response:
+            return json.load(response)
+
+    def test_status_and_logs(self) -> None:
+        self.assertFalse(self.get_json("/api/status")["running"])
+        self.assertEqual(self.get_json("/api/logs?after=4")[0]["id"], 5)
+
+    def test_start_and_queue_actions(self) -> None:
+        result = self.post_json("/api/system/start", {"mock_mode": True})
+        self.assertTrue(result["running"])
+        self.post_json("/api/queue/test", {"gift": "rose"})
+        self.assertEqual(self.runtime.gift, "rose")
+        self.assertEqual(self.post_json("/api/queue/clear", {})["cleared"], 2)
+
+    def test_mapping_save(self) -> None:
+        items = [{"gift": "lion", "action": "lion.mp4", "priority": 5}]
+        self.assertEqual(self.post_json("/api/mappings", {"items": items}), items)
+        self.assertEqual(self.runtime.saved_items, items)
+
+    def test_missing_route_returns_json_404(self) -> None:
+        with self.assertRaises(HTTPError) as error:
+            self.get_json("/missing")
+        self.assertEqual(error.exception.code, 404)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -2,27 +2,36 @@
   "name": "tiktok-live-output",
   "version": "1.0.0",
   "private": true,
-  "description": "Dedicated capture window for TikTok Live Studio",
+  "description": "React and Electron control room for TikTok Live Studio",
   "author": "TikTok Live Control Room",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
     "test": "node --test test/*.test.js",
-    "dist": "electron-builder --win portable --x64"
+    "dist": "npm run build && electron-builder --win portable --x64"
+  },
+  "dependencies": {
+    "lucide-react": "0.468.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "4.3.4",
     "electron": "43.3.0",
-    "electron-builder": "26.15.3"
+    "electron-builder": "26.15.3",
+    "vite": "6.1.0"
   },
   "build": {
     "appId": "io.streamtoearn.tiktok-live-output",
-    "productName": "TikTok Live Output",
+    "productName": "TikTok Live Control Room",
     "asar": true,
     "directories": { "output": "dist" },
-    "files": ["main.js", "window-options.js", "package.json"],
+    "files": ["main.js", "preload.js", "window-options.js", "renderer/dist/**/*", "package.json"],
     "win": {
       "target": ["portable"],
-      "artifactName": "TikTokLiveOutput.exe"
+      "artifactName": "TikTokLiveStudio.exe"
     }
   }
 }
