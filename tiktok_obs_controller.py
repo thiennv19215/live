@@ -531,21 +531,38 @@ class ObsController:
     async def _refresh_scene_items_cache(self) -> dict[str, int]:
         if self.mock_mode or not self._client:
             return {}
+
+        inputs_list = []
         try:
             input_list_resp = await asyncio.to_thread(self._client.get_input_list)
-            self.existing_inputs = [inp["inputName"] for inp in input_list_resp.inputs]
-        except Exception:
-            self.existing_inputs = []
+            raw_inputs = getattr(input_list_resp, "inputs", [])
+            for inp in raw_inputs:
+                name = inp.get("inputName") or inp.get("input_name") if isinstance(inp, dict) else (getattr(inp, "input_name", None) or getattr(inp, "inputName", None))
+                if name:
+                    inputs_list.append(str(name))
+        except Exception as exc:
+            LOGGER.debug("Loi get_input_list: %s", exc)
 
+        self.existing_inputs = inputs_list
+
+        cache: dict[str, int] = {}
         try:
             resp = await asyncio.to_thread(self._client.get_scene_item_list, SCENE_NAME)
-            cache = {item["sourceName"]: item["sceneItemId"] for item in resp.scene_items}
-            self._scene_items_cache = cache
-            return cache
+            raw_items = getattr(resp, "scene_items", []) or getattr(resp, "sceneItems", [])
+            for item in raw_items:
+                if isinstance(item, dict):
+                    s_name = item.get("sourceName") or item.get("source_name")
+                    s_id = item.get("sceneItemId") or item.get("scene_item_id")
+                else:
+                    s_name = getattr(item, "source_name", None) or getattr(item, "sourceName", None)
+                    s_id = getattr(item, "scene_item_id", None) or getattr(item, "sceneItemId", None)
+                if s_name and s_id is not None:
+                    cache[str(s_name)] = int(s_id)
         except Exception as exc:
-            LOGGER.debug("Khong thuc hien duoc get_scene_item_list: %s", exc)
-            self._scene_items_cache = {}
-            return {}
+            LOGGER.debug("Loi get_scene_item_list: %s", exc)
+
+        self._scene_items_cache = cache
+        return cache
 
     async def close(self) -> None:
         async with self._lock:
