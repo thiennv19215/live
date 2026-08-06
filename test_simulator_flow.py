@@ -95,7 +95,7 @@ class TestTikTokLiveStreamSimulator(unittest.IsolatedAsyncioTestCase):
         
         # Test API trạng thái hệ thống
         status = runtime.status()
-        self.assertTrue(status["connected"])
+        self.assertTrue(status["running"])
         self.assertTrue(status["mock_mode"])
 
         # Test API thêm quà bằng thủ công (Test Gift Button)
