@@ -68,6 +68,20 @@ class TestLocalOverlayServer(unittest.TestCase):
         self.assertIn("if (returningToIdle) hideActionImmediately(previous);", html)
         self.assertIn("hideActionImmediately(next);", html)
 
+    def test_output_has_persistent_idle_and_two_rotating_action_players(self) -> None:
+        with urlopen(self.server.url, timeout=2) as response:
+            html = response.read().decode("utf-8")
+        self.assertIn('id="video-idle"', html)
+        self.assertIn('id="video-action-a"', html)
+        self.assertIn('id="video-action-b"', html)
+        self.assertIn("preloadNextAction(state.next_media_url)", html)
+
+    def test_state_exposes_next_queued_media_for_preloading(self) -> None:
+        self.server.show_action(self.action_path, preload_path=self.idle_path)
+        payload, _, _ = self.server.state.snapshot()
+        self.assertRegex(payload["next_media_url"], r"^/media/[0-9a-f]{20}\.mp4$")
+        self.assertNotEqual(payload["media_url"], payload["next_media_url"])
+
     def test_websocket_pushes_snapshot_and_action_state(self) -> None:
         socket = create_connection(f"ws://{self.server.host}:{self.server.ws_port}", timeout=2)
         try:
