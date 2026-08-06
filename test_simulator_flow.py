@@ -92,6 +92,7 @@ class TestTikTokLiveStreamSimulator(unittest.IsolatedAsyncioTestCase):
         """Giả lập điều khiển từ giao diện điều khiển Electron thông qua REST API."""
         runtime = backend_mod.BackendRuntime()
         runtime.app = self.app
+        runtime.app_task = asyncio.create_task(asyncio.sleep(10))
         
         # Test API trạng thái hệ thống
         status = runtime.status()
@@ -107,6 +108,8 @@ class TestTikTokLiveStreamSimulator(unittest.IsolatedAsyncioTestCase):
         cleared_res = runtime.clear_queue()
         self.assertEqual(cleared_res["cleared"], 2)
         self.assertEqual(len(self.app.queue), 0)
+
+        runtime.app_task.cancel()
 
 
 if __name__ == "__main__":
