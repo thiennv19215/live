@@ -1,3 +1,4 @@
 TikTokLive
 obsws-python
 websocket-client
+websockets

@@ -94,6 +94,12 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         stop.assert_not_awaited()
         self.assertEqual(overlay.states, ["action", "idle"])
 
+    async def test_direct_output_mode_never_calls_obs_for_queue_updates(self) -> None:
+        app = core.TikTokObsApp(mock_mode=False, enable_obs=False)
+        with patch.object(app.obs, "update_queue_text", new=AsyncMock()) as update:
+            await app.update_queue_display()
+        update.assert_not_awaited()
+
     async def test_queue_clear(self) -> None:
         """Kiểm tra tính năng xóa queue."""
         job1 = core.GiftJob("rose", Path("cho_1_sui.mp4"), priority=1)
@@ -596,7 +602,7 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertIn((12, False), visibility_calls)
         action_off_index = visibility_calls.index((12, False))
         idle_return_index = len(visibility_calls) - 1 - visibility_calls[::-1].index((11, True))
-        self.assertLess(action_off_index, idle_return_index)
+        self.assertLess(idle_return_index, action_off_index)
         self.assertIn("set_scene_item_index", requested_methods)
         self.assertNotIn("set_scene_item_transform", requested_methods)
         self.assertNotIn("trigger_studio_mode_transition", requested_methods)

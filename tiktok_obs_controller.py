@@ -980,14 +980,18 @@ class ObsController:
             if idle_item_id is not None:
                 await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=idle_item_id, enabled=False)
         else:
+            if idle_item_id is not None:
+                # Bring the looping idle decoder on-screen underneath Action
+                # first. Action stays visible during the warm-up, avoiding the
+                # black/frozen gap caused by disabling it before Idle is ready.
+                await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=idle_item_id, enabled=True)
+                with contextlib.suppress(Exception):
+                    await self._request("trigger_media_input_action", name=IDLE_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY")
+                await asyncio.sleep(0.12)
             if action_item_id is not None:
                 await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=action_item_id, enabled=False)
             with contextlib.suppress(Exception):
                 await self._request("trigger_media_input_action", name=ACTION_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
-            if idle_item_id is not None:
-                await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=idle_item_id, enabled=True)
-                with contextlib.suppress(Exception):
-                    await self._request("trigger_media_input_action", name=IDLE_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY")
 
     def _resolve_real_source_name(self, preferred_name: str, fallback_default: str) -> str:
         inputs = getattr(self, "existing_inputs", [])
@@ -1382,6 +1386,11 @@ class TikTokObsApp:
         return True
 
     async def update_queue_display(self) -> None:
+        # The Browser Overlay is the complete playback path when OBS output is
+        # disabled.  Queue text is an OBS-only feature, and calling it here
+        # would otherwise make _request() connect to OBS implicitly.
+        if not self.enable_obs:
+            return
         queue_items = self.queue.get_items()
         await self.obs.update_queue_text(self.current_job, queue_items)
 

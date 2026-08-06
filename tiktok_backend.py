@@ -214,7 +214,7 @@ class BackendRuntime:
         config["idle_video_paths"] = {"1": stored_path}
         config["idle_video_path_1"] = stored_path
         core.save_obs_config(config)
-        if self.app and self.app.obs.is_connected:
+        if self.app and self.app.enable_obs and self.app.obs.is_connected:
             self.submit(self.app.obs.set_idle_video(path, "main"))
         return str(path)
 

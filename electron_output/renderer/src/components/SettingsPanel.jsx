@@ -37,6 +37,13 @@ export function SettingsPanel({ config, setConfig, status, post, onNotice, compa
     }));
   };
 
+  const selectOutput = (mode) => {
+    setConfig((current) => ({
+      ...current,
+      enable_obs: mode === "obs",
+    }));
+  };
+
   if (compact) {
     const sourceMode = config.mock_mode ? "mock" : config.enable_tiktok ? "tiktok" : "mock";
     return (
@@ -48,8 +55,14 @@ export function SettingsPanel({ config, setConfig, status, post, onNotice, compa
           <button className={sourceMode === "mock" ? "active" : ""} onClick={() => selectSource("mock")}>Giả lập</button>
         </div>
         <p>{sourceMode === "mock" ? "Phát thử video và audio trực tiếp trong preview, không cần OBS." : "Nhận quà TikTok realtime và điều khiển luồng phát."}</p>
+        <div className="source-title"><div><span>PLAYBACK OUTPUT</span><h2>Đầu ra phát video</h2></div></div>
+        <div className="source-tabs output-tabs">
+          <button className={!config.enable_obs ? "active" : ""} onClick={() => selectOutput("app")}>Output của app</button>
+          <button className={config.enable_obs ? "active" : ""} onClick={() => selectOutput("obs")}>OBS</button>
+        </div>
+        <p>{config.enable_obs ? "Phát đồng thời qua OBS và Output của app." : "Chỉ phát trực tiếp trong Preview/Output của app; không kết nối OBS."}</p>
         <div className="source-actions">
-          <button className="primary-action" onClick={start} disabled={status.running}><Play size={15} fill="currentColor" /> Kết nối</button>
+          <button className="primary-action" onClick={start} disabled={status.running}><Play size={15} fill="currentColor" /> {sourceMode === "mock" ? "Bật giả lập" : "Kết nối TikTok"}</button>
           <button className="stop-action" onClick={() => post("/api/system/stop")} disabled={!status.running}><Square size={13} fill="currentColor" /> Ngắt</button>
         </div>
       </aside>

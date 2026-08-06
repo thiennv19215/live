@@ -13,6 +13,7 @@ python -m PyInstaller `
     --name TikTokLiveBackend `
     --collect-all TikTokLive `
     --collect-all obsws_python `
+    --collect-all websockets `
     .\tiktok_backend.py
 if ($LASTEXITCODE -ne 0) { throw "TikTokLiveBackend build failed" }
 

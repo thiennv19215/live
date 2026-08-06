@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import mimetypes
 import threading
@@ -10,6 +11,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
+
+from websockets.exceptions import ConnectionClosed
+from websockets.sync.server import serve as serve_websocket
 
 
 IMAGE_EXTENSIONS = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
@@ -42,6 +46,7 @@ OVERLAY_HTML = r"""<!doctype html>
       transition: opacity 220ms cubic-bezier(.22, .61, .36, 1);
     }
     .media.active { opacity: 1; }
+    .media.no-transition { transition: none !important; }
     #status {
       position: absolute;
       left: 50%;
@@ -89,6 +94,13 @@ OVERLAY_HTML = r"""<!doctype html>
     let currentVersion = -1;
     let activeMedia = null;
     let loadGeneration = 0;
+    let socket = null;
+    let reconnectTimer = null;
+
+    function sendPlaybackEvent(type, state, detail = "") {
+      if (socket?.readyState !== WebSocket.OPEN) return;
+      socket.send(JSON.stringify({ type, playback_id: state.version, mode: state.mode, detail }));
+    }
 
     function showStatus(text, force = false) {
       status.textContent = text;
@@ -98,11 +110,23 @@ OVERLAY_HTML = r"""<!doctype html>
     function releaseMedia(element) {
       if (!element) return;
       element.classList.remove("active");
+      element.classList.remove("no-transition");
       element.onended = null;
       if (element.tagName === "VIDEO") element.pause();
       element.removeAttribute("src");
       delete element.dataset.mode;
       if (element.tagName === "VIDEO") element.load();
+    }
+
+    function hideActionImmediately(element) {
+      if (!element) return;
+      // The decoder may expose a black terminal frame immediately before
+      // `ended`. Never fade that frame over the live Idle layer.
+      element.classList.add("no-transition");
+      element.classList.remove("active");
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        element.classList.remove("no-transition");
+      }));
     }
 
     function hideMedia() {
@@ -134,9 +158,9 @@ OVERLAY_HTML = r"""<!doctype html>
       const target = state.mode === "idle"
         ? elapsed % video.duration
         : Math.min(elapsed, Math.max(0, video.duration - 0.04));
-      // A preview iframe can be throttled differently from the output window.
-      // Correct only meaningful drift, avoiding visible micro-seeks every poll.
-      if (Math.abs(video.currentTime - target) > 0.12) video.currentTime = target;
+      // Synchronize only while preparing a newly-loaded element. Re-seeking a
+      // playing Chromium/OBS video on every state poll causes visible freezes.
+      if (Math.abs(video.currentTime - target) > 0.5) video.currentTime = target;
     }
 
     async function prepareMedia(state, mediaUrl) {
@@ -146,7 +170,7 @@ OVERLAY_HTML = r"""<!doctype html>
         : null;
       if (cachedIdle) {
         if (cachedIdle.tagName === "VIDEO") {
-          syncToSharedClock(cachedIdle, state);
+          // Idle kept playing behind the action, so revealing it must not seek.
           await cachedIdle.play();
         }
         return cachedIdle;
@@ -169,11 +193,13 @@ OVERLAY_HTML = r"""<!doctype html>
         if (next.readyState < 3) await waitForReady(next, "canplay");
         syncToSharedClock(next, state);
         await next.play();
+        sendPlaybackEvent("media_ready", state);
         next.onended = state.mode === "action" ? () => {
           // Reveal the already-running idle layer immediately. Waiting for the
           // next poll here can expose the action video's black final frame.
-          next.classList.remove("active");
+          hideActionImmediately(next);
           sound.pause();
+          sendPlaybackEvent("media_ended", state);
         } : null;
       }
       return next;
@@ -193,7 +219,9 @@ OVERLAY_HTML = r"""<!doctype html>
       if (previous && previous !== next) {
         const keepIdleBehindAction = previous.dataset.mode === "idle" && next.dataset.mode === "action";
         if (!keepIdleBehindAction) {
-          previous.classList.remove("active");
+          const returningToIdle = previous.dataset.mode === "action" && next.dataset.mode === "idle";
+          if (returningToIdle) hideActionImmediately(previous);
+          else previous.classList.remove("active");
           setTimeout(() => {
             if (previous !== activeMedia) releaseMedia(previous);
           }, 250);
@@ -211,7 +239,9 @@ OVERLAY_HTML = r"""<!doctype html>
         return;
       }
 
-      const mediaUrl = `${state.media_url}?v=${state.version}`;
+      // media_url is fingerprinted by file contents/metadata. Keep it stable
+      // across playbacks so Chromium can reuse its memory/disk media cache.
+      const mediaUrl = state.media_url;
       try {
         const next = await prepareMedia(state, mediaUrl);
         if (generation !== loadGeneration) {
@@ -224,13 +254,14 @@ OVERLAY_HTML = r"""<!doctype html>
         // promise is still pending.  That is an expected transition, not a
         // playback failure worth showing to the audience.
         if (generation !== loadGeneration || error?.name === "AbortError") return;
+        sendPlaybackEvent("media_error", state, error.message);
         showStatus(`Playback failed: ${error.message}`, true);
         return;
       }
 
       sound.pause();
       if (state.sound_url && !muted) {
-        sound.src = `${state.sound_url}?v=${state.version}`;
+        sound.src = state.sound_url;
         try {
           if (sound.readyState < 1) await waitForReady(sound, "loadedmetadata");
           syncToSharedClock(sound, state);
@@ -239,23 +270,30 @@ OVERLAY_HTML = r"""<!doctype html>
       }
     }
 
-    async function refresh() {
-      try {
-        const response = await fetch("/api/state", { cache: "no-store" });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const state = await response.json();
-        if (state.version === currentVersion && activeMedia?.tagName === "VIDEO" && activeMedia.dataset.mode === state.mode) {
-          syncToSharedClock(activeMedia, state);
-          return;
+    function connectSocket() {
+      clearTimeout(reconnectTimer);
+      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      socket = new WebSocket(`${protocol}//${location.hostname}:__WS_PORT__`);
+      socket.onopen = () => showStatus("Output connected");
+      socket.onmessage = async (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          const state = message.state || message;
+          if (message.type && message.type !== "playback_state") return;
+          if (state.version === currentVersion) return;
+          await applyState(state);
+        } catch (error) {
+          showStatus(`Invalid playback state: ${error.message}`, true);
         }
-        await applyState(state);
-      } catch (error) {
-        showStatus(`Overlay disconnected: ${error.message}`, true);
-      }
+      };
+      socket.onerror = () => socket.close();
+      socket.onclose = () => {
+        showStatus("Output disconnected; reconnecting…", true);
+        reconnectTimer = setTimeout(connectSocket, 500);
+      };
     }
 
-    refresh();
-    setInterval(refresh, 200);
+    connectSocket();
   </script>
 </body>
 </html>
@@ -271,16 +309,32 @@ class OverlayState:
         self._mode = "idle"
         self._label = self._idle_path.name if self._idle_path else "No idle media"
         self._version = 1
-        self._started_at_ms = int(time.time() * 1000)
+        self._assets: dict[str, Path] = {}
+        self._idle_started_at_ms = int(time.time() * 1000)
+        self._started_at_ms = self._idle_started_at_ms
+
+    def _register_asset(self, path: Path, kind: str) -> str:
+        stat = path.stat()
+        identity = f"{path.resolve()}|{stat.st_size}|{stat.st_mtime_ns}".encode("utf-8")
+        fingerprint = hashlib.sha256(identity).hexdigest()[:20]
+        route = f"/{kind}/{fingerprint}{path.suffix.lower()}"
+        self._assets[route] = path.resolve()
+        return route
+
+    def resolve_asset(self, route: str) -> Path | None:
+        with self._lock:
+            path = self._assets.get(route)
+            return path if path and path.is_file() else None
 
     def set_idle_path(self, path: Path | None) -> None:
         resolved = Path(path).resolve() if path else None
         with self._lock:
             self._idle_path = resolved
+            self._idle_started_at_ms = int(time.time() * 1000)
             if self._mode == "idle":
                 self._label = resolved.name if resolved else "No idle media"
                 self._version += 1
-                self._started_at_ms = int(time.time() * 1000)
+                self._started_at_ms = self._idle_started_at_ms
 
     def show_action(self, path: Path, sound_path: Path | None = None, label: str = "") -> None:
         with self._lock:
@@ -298,7 +352,9 @@ class OverlayState:
             self._mode = "idle"
             self._label = self._idle_path.name if self._idle_path else "No idle media"
             self._version += 1
-            self._started_at_ms = int(time.time() * 1000)
+            # The idle element remains alive underneath actions. Preserve its
+            # original clock so returning to idle never jumps back to frame 0.
+            self._started_at_ms = self._idle_started_at_ms
 
     def snapshot(self) -> tuple[dict[str, object], Path | None, Path | None]:
         with self._lock:
@@ -306,14 +362,16 @@ class OverlayState:
             sound_path = self._sound_path if self._mode == "action" else None
             media_exists = bool(media_path and media_path.is_file())
             sound_exists = bool(sound_path and sound_path.is_file())
+            media_url = self._register_asset(media_path, "media") if media_exists and media_path else ""
+            sound_url = self._register_asset(sound_path, "audio") if sound_exists and sound_path else ""
             payload: dict[str, object] = {
                 "mode": self._mode if media_exists else "empty",
                 "label": self._label,
                 "version": self._version,
                 "started_at_ms": self._started_at_ms,
                 "media_type": "image" if media_path and media_path.suffix.lower() in IMAGE_EXTENSIONS else "video",
-                "media_url": "/media/current" if media_exists else "",
-                "sound_url": "/audio/current" if sound_exists else "",
+                "media_url": media_url,
+                "sound_url": sound_url,
             }
             return payload, media_path if media_exists else None, sound_path if sound_exists else None
 
@@ -343,20 +401,18 @@ class _OverlayRequestHandler(BaseHTTPRequestHandler):
     def _handle_request(self, send_body: bool) -> None:
         path = urlparse(self.path).path
         if path in ("/", "/overlay"):
-            self._send_bytes(OVERLAY_HTML.encode("utf-8"), "text/html; charset=utf-8", send_body, no_store=True)
+            self._send_bytes(self.server.overlay.render_html().encode("utf-8"), "text/html; charset=utf-8", send_body, no_store=True)
             return
         if path == "/health":
             self._send_bytes(b"ok", "text/plain; charset=utf-8", send_body)
             return
-        payload, media_path, sound_path = self.server.overlay.state.snapshot()
+        payload, _, _ = self.server.overlay.state.snapshot()
         if path == "/api/state":
             self._send_bytes(json.dumps(payload).encode("utf-8"), "application/json", send_body, no_store=True)
             return
-        if path == "/media/current" and media_path:
-            self._send_file(media_path, send_body)
-            return
-        if path == "/audio/current" and sound_path:
-            self._send_file(sound_path, send_body)
+        asset_path = self.server.overlay.state.resolve_asset(path)
+        if asset_path and (path.startswith("/media/") or path.startswith("/audio/")):
+            self._send_file(asset_path, send_body)
             return
         self.send_error(404)
 
@@ -410,7 +466,7 @@ class _OverlayRequestHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(length))
-        self.send_header("Cache-Control", "no-store, max-age=0")
+        self.send_header("Cache-Control", "public, max-age=31536000, immutable")
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
         self.end_headers()
@@ -438,6 +494,11 @@ class LocalOverlayServer:
         self.state = OverlayState(idle_path)
         self._server: _OverlayHttpServer | None = None
         self._thread: threading.Thread | None = None
+        self.ws_port = 0
+        self._ws_server: object | None = None
+        self._ws_thread: threading.Thread | None = None
+        self._ws_clients: set[object] = set()
+        self._ws_lock = threading.Lock()
 
     @property
     def is_running(self) -> bool:
@@ -463,23 +524,83 @@ class LocalOverlayServer:
             raise last_error or OSError("No local port available for overlay")
         self._thread = threading.Thread(target=self._server.serve_forever, name="tiktok-overlay", daemon=True)
         self._thread.start()
+        self._start_websocket()
         return self.url
+
+    def render_html(self) -> str:
+        return OVERLAY_HTML.replace("__WS_PORT__", str(self.ws_port))
+
+    def _start_websocket(self) -> None:
+        last_error: OSError | None = None
+        for candidate in range(self.port + 100, self.port + 110):
+            try:
+                self._ws_server = serve_websocket(self._handle_websocket, self.host, candidate)
+                self.ws_port = candidate
+                break
+            except OSError as exc:
+                last_error = exc
+        if self._ws_server is None:
+            raise last_error or OSError("No local port available for overlay WebSocket")
+        self._ws_thread = threading.Thread(
+            target=self._ws_server.serve_forever,
+            name="tiktok-overlay-websocket",
+            daemon=True,
+        )
+        self._ws_thread.start()
+
+    def _handle_websocket(self, connection: object) -> None:
+        with self._ws_lock:
+            self._ws_clients.add(connection)
+        try:
+            payload, _, _ = self.state.snapshot()
+            connection.send(json.dumps({"type": "playback_state", "state": payload}))
+            for _message in connection:
+                # ready/ended/error acknowledgements are accepted here. Python
+                # keeps its duration watchdog so a closed Output cannot stall.
+                pass
+        except ConnectionClosed:
+            pass
+        finally:
+            with self._ws_lock:
+                self._ws_clients.discard(connection)
+
+    def _broadcast_state(self) -> None:
+        payload, _, _ = self.state.snapshot()
+        message = json.dumps({"type": "playback_state", "state": payload})
+        with self._ws_lock:
+            clients = list(self._ws_clients)
+        for connection in clients:
+            try:
+                connection.send(message)
+            except (ConnectionClosed, OSError):
+                with self._ws_lock:
+                    self._ws_clients.discard(connection)
 
     def stop(self) -> None:
         server, thread = self._server, self._thread
+        ws_server, ws_thread = self._ws_server, self._ws_thread
         self._server = None
         self._thread = None
+        self._ws_server = None
+        self._ws_thread = None
         if server:
             server.shutdown()
             server.server_close()
         if thread and thread.is_alive():
             thread.join(timeout=2.0)
+        if ws_server:
+            ws_server.shutdown()
+        if ws_thread and ws_thread.is_alive():
+            ws_thread.join(timeout=2.0)
 
     def set_idle_path(self, path: Path | None) -> None:
         self.state.set_idle_path(path)
+        self._broadcast_state()
 
     def show_action(self, path: Path, sound_path: Path | None = None, label: str = "") -> None:
         self.state.show_action(path, sound_path=sound_path, label=label)
+        self._broadcast_state()
 
     def show_idle(self) -> None:
         self.state.show_idle()
+        self._broadcast_state()
