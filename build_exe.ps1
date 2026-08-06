@@ -60,7 +60,7 @@ if (Test-Path ".\videos") {
 } else {
     Write-Host "No videos folder found. Create dist\videos and copy your MP4 files there." -ForegroundColor Yellow
 }
-foreach ($configFile in @("gift_config.json", "obs_config.json")) {
+foreach ($configFile in @("gift_config.json", "action_presets.json", "obs_config.json")) {
     if (Test-Path ".\$configFile") {
         Copy-Item ".\$configFile" ".\dist\$configFile" -Force
     }

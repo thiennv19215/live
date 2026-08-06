@@ -153,7 +153,7 @@ function runtimeDataDirectory() {
 function seedRuntimeData() {
   const targetRoot = runtimeDataDirectory();
   fs.mkdirSync(targetRoot, { recursive: true });
-  for (const name of ["gift_config.json", "obs_config.json"]) {
+  for (const name of ["gift_config.json", "action_presets.json", "obs_config.json"]) {
     const source = path.join(releaseDirectory(), name);
     const target = path.join(targetRoot, name);
     if (!fs.existsSync(target) && fs.existsSync(source)) fs.copyFileSync(source, target);

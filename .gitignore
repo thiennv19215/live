@@ -11,3 +11,4 @@ node_modules/
 .vscode/
 queue_status.txt
 obs_config.json
+.ui-check-pids

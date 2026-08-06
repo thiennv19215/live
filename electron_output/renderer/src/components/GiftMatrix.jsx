@@ -2,70 +2,152 @@ import { FolderOpen, Music2, Play, Plus, Save, Trash2, Video } from "lucide-reac
 
 const fileName = (path = "") => path.split(/[\\/]/).at(-1) || "Chưa gán";
 
-export function GiftMatrix({ mappings, setMappings, post, onNotice }) {
-  const update = (index, key, value) => {
+export function GiftMatrix({ mappings, setMappings, actions, setActions, post, reloadConfig, onNotice }) {
+  const updateMapping = (index, key, value) => {
     setMappings((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, [key]: value } : item));
   };
 
-  const save = async () => {
-    const next = await post("/api/mappings", { items: mappings });
-    setMappings(next);
-    onNotice("Đã lưu Gift Mapping");
+  const chooseAction = (index, actionId) => {
+    const preset = actions.find((item) => item.id === actionId);
+    setMappings((current) => current.map((item, itemIndex) => itemIndex === index ? {
+      ...item,
+      action: actionId,
+      action_id: actionId,
+      action_name: preset?.name || actionId,
+      videos: preset?.videos || [],
+      resolved_sound: preset?.sound || "",
+      sound: "",
+    } : item));
   };
 
-  const add = () => setMappings((current) => [...current, { gift: "new_gift", action: "", priority: 1, sound: "" }]);
-  const persist = async (items, message) => {
+  const saveMappings = async () => {
+    const next = await post("/api/mappings", { items: mappings });
+    setMappings(next);
+    await reloadConfig?.();
+    onNotice("Đã lưu luật quà → hành động");
+  };
+
+  const addMapping = () => {
+    const first = actions[0];
+    setMappings((current) => [...current, {
+      gift: "new_gift",
+      action: first?.id || "",
+      action_id: first?.id || "",
+      action_name: first?.name || "",
+      videos: first?.videos || [],
+      priority: 1,
+      sound: "",
+    }]);
+  };
+
+  const removeMapping = async (index) => {
+    const items = mappings.filter((_, itemIndex) => itemIndex !== index);
     const saved = await post("/api/mappings", { items });
     setMappings(saved);
+    onNotice("Đã xóa luật quà");
+  };
+
+  const updateAction = (index, key, value) => {
+    setActions((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, [key]: value } : item));
+  };
+
+  const persistActions = async (items, message) => {
+    const saved = await post("/api/actions", { items });
+    setActions(saved);
+    await reloadConfig?.();
     onNotice(message);
   };
 
+  const saveActions = () => persistActions(actions, "Đã lưu kho hành động");
+
+  const addAction = () => {
+    const used = new Set(actions.map((item) => item.id));
+    let number = actions.length + 1;
+    while (used.has(`action_${number}`)) number += 1;
+    setActions((current) => [...current, { id: `action_${number}`, name: "Hành động mới", videos: [], sound: "" }]);
+  };
+
   const pickVideo = async (index) => {
-    const paths = await window.desktop?.pickMedia?.({ title: `Gán video cho ${mappings[index].gift}`, multiple: true, copyToLibrary: true });
+    const paths = await window.desktop?.pickMedia?.({ title: `Gán video cho ${actions[index].name}`, multiple: true, copyToLibrary: true });
     if (!paths?.length) return;
-    const items = mappings.map((item, itemIndex) => itemIndex === index ? { ...item, action: paths.join(", ") } : item);
-    await persist(items, `Đã gán ${paths.length} video cho ${mappings[index].gift}`);
+    const items = actions.map((item, itemIndex) => itemIndex === index ? { ...item, videos: paths } : item);
+    await persistActions(items, `Đã gán ${paths.length} video cho hành động`);
   };
 
   const pickAudio = async (index) => {
-    const path = await window.desktop?.pickMedia?.({ title: `Gán audio cho ${mappings[index].gift}`, kind: "audio", copyToLibrary: true });
+    const path = await window.desktop?.pickMedia?.({ title: `Gán audio cho ${actions[index].name}`, kind: "audio", copyToLibrary: true });
     if (!path) return;
-    const items = mappings.map((item, itemIndex) => itemIndex === index ? { ...item, sound: path } : item);
-    await persist(items, `Đã gán audio cho ${mappings[index].gift}`);
+    const items = actions.map((item, itemIndex) => itemIndex === index ? { ...item, sound: path } : item);
+    await persistActions(items, "Đã gán audio cho hành động");
   };
 
-  const remove = async (index) => {
-    const items = mappings.filter((_, itemIndex) => itemIndex !== index);
-    await persist(items, "Đã xóa mapping quà");
+  const removeAction = async (index) => {
+    const action = actions[index];
+    if (mappings.some((item) => (item.action_id || item.action) === action.id)) {
+      onNotice("Hành động đang được một quà sử dụng", "error");
+      return;
+    }
+    await persistActions(actions.filter((_, itemIndex) => itemIndex !== index), "Đã xóa hành động");
   };
 
   return (
     <section className="gift-panel">
       <div className="panel-heading compact">
-        <div><span>TRIGGER MATRIX</span><h2>Quà và hành động</h2></div>
+        <div><span>TRIGGER RULES</span><h2>Quà → hành động</h2></div>
         <div className="heading-actions">
-          <button className="icon-button" onClick={add} title="Thêm quà"><Plus size={17} /></button>
-          <button className="icon-button accent" onClick={save} title="Lưu mapping"><Save size={17} /></button>
+          <button className="icon-button" onClick={addMapping} title="Thêm luật quà"><Plus size={17} /></button>
+          <button className="icon-button accent" onClick={saveMappings} title="Lưu luật"><Save size={17} /></button>
         </div>
       </div>
-      <div className="gift-list">
-        {mappings.map((item, index) => (
-          <article className="gift-row" key={`${item.gift}-${index}`}>
-            <div className="gift-topline assignment-topline">
-              <input className="gift-name" value={item.gift} onChange={(event) => update(index, "gift", event.target.value)} aria-label="Tên quà" />
-              <label className="priority-field">P<input type="number" min="1" max="9" value={item.priority} onChange={(event) => update(index, "priority", Number(event.target.value))} /></label>
-              <button onClick={() => remove(index)} title="Xóa"><Trash2 size={15} /></button>
+
+      <div className="gift-list mapping-list">
+        {mappings.map((item, index) => {
+          const selectedId = item.action_id || item.action;
+          const isLegacy = selectedId && !actions.some((action) => action.id === selectedId);
+          return (
+            <article className="gift-row" key={`${item.gift}-${index}`}>
+              <div className="gift-topline assignment-topline rule-topline">
+                <input className="gift-name" value={item.gift} onChange={(event) => updateMapping(index, "gift", event.target.value)} aria-label="Tên quà" />
+                <select value={selectedId} onChange={(event) => chooseAction(index, event.target.value)} aria-label="Hành động">
+                  <option value="">Chọn hành động…</option>
+                  {isLegacy ? <option value={selectedId}>Cấu hình cũ · sẽ tự chuyển đổi</option> : null}
+                  {actions.map((action) => <option value={action.id} key={action.id}>{action.name}</option>)}
+                </select>
+                <button onClick={() => removeMapping(index)} title="Xóa"><Trash2 size={15} /></button>
+              </div>
+              <div className="gift-detail"><span>{item.action_name || selectedId || "Chưa chọn"}</span><span>FIFO</span></div>
+              <div className="assignment-actions rule-actions">
+                <button className="test" disabled={!selectedId} onClick={() => post("/api/queue/test", { gift: item.gift })}><Play size={14} fill="currentColor" /> Phát thử</button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="panel-heading compact action-library-heading">
+        <div><span>ACTION LIBRARY</span><h2>Kho hành động dùng chung</h2></div>
+        <div className="heading-actions">
+          <button className="icon-button" onClick={addAction} title="Thêm hành động"><Plus size={17} /></button>
+          <button className="icon-button accent" onClick={saveActions} title="Lưu hành động"><Save size={17} /></button>
+        </div>
+      </div>
+
+      <div className="gift-list action-list">
+        {actions.map((action, index) => (
+          <article className="gift-row action-row" key={action.id}>
+            <div className="gift-topline assignment-topline action-topline">
+              <input value={action.name} onChange={(event) => updateAction(index, "name", event.target.value)} aria-label="Tên hành động" />
+              <code title="Mã ổn định dùng trong mapping">{action.id}</code>
+              <button onClick={() => removeAction(index)} title="Xóa"><Trash2 size={15} /></button>
             </div>
             <div className="assignment-summary">
-              <div><Video size={15} /><span><small>VIDEO HÀNH ĐỘNG</small><strong title={item.action}>{item.videos?.length > 1 ? `${item.videos.length} video đã gán` : fileName(item.videos?.[0] || item.action)}</strong></span></div>
-              <div><Music2 size={15} /><span><small>AUDIO</small><strong title={item.sound}>{fileName(item.sound)}</strong></span></div>
+              <div><Video size={15} /><span><small>VIDEO</small><strong>{action.videos?.length > 1 ? `${action.videos.length} video` : fileName(action.videos?.[0])}</strong></span></div>
+              <div><Music2 size={15} /><span><small>AUDIO</small><strong>{fileName(action.sound)}</strong></span></div>
             </div>
-            <div className="assignment-actions">
+            <div className="assignment-actions action-buttons">
               <button onClick={() => pickVideo(index)}><FolderOpen size={14} /> Gán video</button>
               <button onClick={() => pickAudio(index)}><Music2 size={14} /> Gán audio</button>
-              <button className="test" onClick={() => post("/api/queue/test", { gift: item.gift })}><Play size={14} fill="currentColor" /> Phát thử</button>
             </div>
-            <div className="gift-detail"><span>{item.action_name || "Custom Video"}</span><span>P{item.priority}</span></div>
           </article>
         ))}
       </div>

@@ -258,12 +258,16 @@ def select_random_video_filename(val: str | list[str] | Any) -> str:
 
 def load_action_presets() -> dict[str, ActionPreset]:
     presets: dict[str, ActionPreset] = {}
-    data = DEFAULT_ACTION_PRESETS.copy()
+    data: dict[str, Any] = DEFAULT_ACTION_PRESETS.copy()
     if ACTION_PRESETS_FILE.is_file():
         try:
             with open(ACTION_PRESETS_FILE, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
-                if isinstance(loaded, dict):
+                if isinstance(loaded, dict) and isinstance(loaded.get("actions"), dict):
+                    # Version 2 is authoritative so actions can also be deleted.
+                    data = loaded["actions"]
+                elif isinstance(loaded, dict):
+                    # Legacy files stored presets directly at the root.
                     data.update(loaded)
         except Exception:
             pass
@@ -279,17 +283,21 @@ def load_action_presets() -> dict[str, ActionPreset]:
 
 
 def save_action_presets(presets: dict[str, ActionPreset | dict[str, Any]]) -> None:
-    data = {}
+    data: dict[str, dict[str, Any]] = {}
     for aid, preset in presets.items():
         if isinstance(preset, ActionPreset):
             data[aid] = {
                 "name": preset.name,
-                "videos": preset.videos,
-                "sound_filename": preset.sound_filename,
+                "videos": [media_reference(item) for item in preset.videos if item],
+                "sound_filename": media_reference(preset.sound_filename) if preset.sound_filename else "",
             }
         elif isinstance(preset, dict):
-            data[aid] = preset
-    atomic_write_json(ACTION_PRESETS_FILE, data)
+            data[aid] = {
+                "name": str(preset.get("name", aid)),
+                "videos": [media_reference(item) for item in parse_video_filenames(preset.get("videos", [])) if item],
+                "sound_filename": media_reference(preset.get("sound_filename", "")) if preset.get("sound_filename") else "",
+            }
+    atomic_write_json(ACTION_PRESETS_FILE, {"version": 2, "actions": data})
 
 
 ACTION_PRESETS = load_action_presets()
@@ -329,16 +337,38 @@ def load_gift_mapping() -> dict[str, tuple[str, int, str, str]]:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 res: dict[str, tuple[str, int, str, str]] = {}
-                for k, v in data.items():
+                if isinstance(data, dict) and isinstance(data.get("mappings"), list):
+                    entries = (
+                        (str(item.get("gift_name", "")), item)
+                        for item in data["mappings"]
+                        if isinstance(item, dict)
+                    )
+                elif isinstance(data, dict):
+                    entries = data.items()
+                else:
+                    entries = []
+
+                for k, v in entries:
                     gift_key = str(k).lower().strip()
-                    raw_fn = v[0]
+                    if not gift_key:
+                        continue
+                    if isinstance(v, dict):
+                        raw_fn = v.get("action_id", v.get("action", ""))
+                        prio = int(v.get("priority", 1))
+                        sound_fn = str(v.get("sound_override", v.get("sound", "")))
+                        target = str(v.get("target", "main"))
+                    elif isinstance(v, (list, tuple)) and v:
+                        raw_fn = v[0]
+                        prio = int(v[1]) if len(v) > 1 else 1
+                        sound_fn = str(v[2]) if len(v) > 2 else ""
+                        target = str(v[3]) if len(v) > 3 else "main"
+                    else:
+                        continue
                     if isinstance(raw_fn, list):
                         fn = ", ".join(str(x).strip() for x in raw_fn if str(x).strip())
                     else:
                         fn = str(raw_fn).strip()
-                    prio = int(v[1])
-                    sound_fn = str(v[2]) if len(v) > 2 else ""
-                    res[gift_key] = (fn, prio, sound_fn, "main")
+                    res[gift_key] = (fn, prio, sound_fn, target)
                 return res
         except Exception:
             pass
@@ -346,14 +376,27 @@ def load_gift_mapping() -> dict[str, tuple[str, int, str, str]]:
 
 
 def save_gift_mapping(mapping: dict[str, Any]) -> None:
-    data = {}
+    items = []
     for k, v in mapping.items():
-        videos = [media_reference(item) for item in parse_video_filenames(v[0])]
-        fn = ", ".join(item for item in videos if item)
-        prio = int(v[1])
-        sound_fn = media_reference(v[2]) if len(v) > 2 else ""
-        data[str(k).lower().strip()] = [fn, prio, sound_fn, "main"]
-    atomic_write_json(CONFIG_FILE, data)
+        gift_name = str(k).lower().strip()
+        if not gift_name:
+            continue
+        action_value = str(v[0]).strip()
+        # A preset id is portable by definition. Legacy direct media mappings
+        # remain portable until the backend migrates them into a preset.
+        action_id = action_value if action_value in ACTION_PRESETS else ", ".join(
+            media_reference(item) for item in parse_video_filenames(action_value) if item
+        )
+        items.append(
+            {
+                "gift_name": gift_name,
+                "action_id": action_id,
+                "priority": int(v[1]),
+                "sound_override": media_reference(v[2]) if len(v) > 2 and v[2] else "",
+                "target": str(v[3]) if len(v) > 3 else "main",
+            }
+        )
+    atomic_write_json(CONFIG_FILE, {"version": 2, "mappings": items})
 
 
 GIFT_MAPPING = load_gift_mapping()

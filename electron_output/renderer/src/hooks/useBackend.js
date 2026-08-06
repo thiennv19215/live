@@ -22,6 +22,7 @@ export function useBackend() {
   const [status, setStatus] = useState(EMPTY_STATUS);
   const [config, setConfig] = useState(null);
   const [mappings, setMappings] = useState([]);
+  const [actions, setActions] = useState([]);
   const [logs, setLogs] = useState([]);
   const [online, setOnline] = useState(false);
   const [error, setError] = useState("");
@@ -64,9 +65,10 @@ export function useBackend() {
 
   const loadInitial = useCallback(async () => {
     try {
-      const [nextConfig, nextMappings] = await Promise.all([
+      const [nextConfig, nextMappings, nextActions] = await Promise.all([
         api.get("/api/config"),
         api.get("/api/mappings"),
+        api.get("/api/actions"),
       ]);
       setConfig({
         ...nextConfig,
@@ -75,6 +77,7 @@ export function useBackend() {
         enable_obs: nextConfig.enable_obs ?? false,
       });
       setMappings(nextMappings);
+      setActions(nextActions);
     } catch (nextError) {
       setError(nextError.message);
     }
@@ -113,6 +116,8 @@ export function useBackend() {
     setConfig,
     mappings,
     setMappings,
+    actions,
+    setActions,
     logs,
     online,
     error,

@@ -134,10 +134,17 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .gift-panel, .queue-panel { min-height: 0; overflow: hidden; }
 .gift-panel { padding: 14px; display: flex; flex-direction: column; }
 .gift-list { min-height: 0; overflow: auto; padding-right: 3px; }
+.mapping-list, .action-list { flex: 1 1 0; }
+.mapping-list { min-height: 120px; }
+.action-list { min-height: 180px; }
 .gift-row { margin-bottom: 8px; padding: 10px; border: 1px solid #2f2844; border-radius: 8px; background: #14101f; }
 .gift-row:first-child { border-top: 1px solid #2f2844; }
 .gift-topline { display: grid; grid-template-columns: minmax(0, 1fr) 45px 29px 29px; gap: 5px; margin-bottom: 6px; }
 .gift-topline.assignment-topline { grid-template-columns: minmax(0, 1fr) 45px 30px; }
+.gift-topline.rule-topline { grid-template-columns: minmax(110px, .8fr) minmax(160px, 1.2fr) 30px; }
+.gift-topline.action-topline { grid-template-columns: minmax(140px, 1fr) minmax(100px, .7fr) 30px; }
+.gift-topline select { min-width: 0; border: 1px solid #3a3154; border-radius: 5px; background: #100d1b; color: var(--cyan); padding: 7px 8px; font-size: 10px; }
+.gift-topline code { overflow: hidden; padding: 8px; color: #81778f; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .gift-row input { padding: 7px 8px; }
 .gift-row .gift-name { color: var(--green); font-weight: 700; text-transform: lowercase; }
 .gift-topline button { border: 1px solid #243742; background: #12212a; color: #89a1ab; cursor: pointer; display: grid; place-items: center; }
@@ -152,6 +159,10 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .assignment-actions button { min-height: 31px; padding: 0 7px; border: 1px solid #3a3154; border-radius: 5px; background: #211a31; color: #bdb3ca; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 9px; font-weight: 700; }
 .assignment-actions button:hover { border-color: var(--cyan); color: var(--cyan); }
 .assignment-actions button.test { border: 0; background: linear-gradient(105deg, var(--cyan), var(--violet)); color: #fff; }
+.assignment-actions button:disabled { cursor: not-allowed; filter: grayscale(1); opacity: .45; }
+.assignment-actions.rule-actions { grid-template-columns: 1fr; }
+.assignment-actions.action-buttons { grid-template-columns: 1fr 1fr; }
+.action-library-heading { margin-top: 10px; padding-top: 12px; border-top: 1px solid #2f2844; }
 .priority-field { display: flex; align-items: center; gap: 2px; color: var(--amber); font-size: 9px; }
 .priority-field input { width: 31px; padding: 7px 3px; text-align: center; }
 .gift-detail { display: flex; justify-content: space-between; margin-top: 5px; color: #617985; font-size: 9px; }

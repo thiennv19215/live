@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import threading
 import time
 from collections import deque
@@ -120,6 +121,7 @@ class BackendRuntime:
                 {
                     "gift": gift,
                     "action": str(value[0]),
+                    "action_id": str(value[0]) if str(value[0]) in core.ACTION_PRESETS else "",
                     "priority": int(value[1]),
                     "sound": str(value[2]),
                     "action_name": action_name,
@@ -129,14 +131,74 @@ class BackendRuntime:
             )
         return result
 
+    def actions(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": preset.id,
+                "name": preset.name,
+                "videos": list(preset.videos),
+                "sound": preset.sound_filename,
+            }
+            for preset in core.ACTION_PRESETS.values()
+        ]
+
+    @staticmethod
+    def _action_id(value: str, fallback: str = "action") -> str:
+        normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
+        return normalized or fallback
+
+    def save_actions(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        presets: dict[str, core.ActionPreset] = {}
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                continue
+            action_id = self._action_id(str(item.get("id", "")), f"action_{index}")
+            if action_id in presets:
+                raise ValueError(f"Trung ma hanh dong: {action_id}")
+            videos = [value for value in core.parse_video_filenames(item.get("videos", [])) if value]
+            presets[action_id] = core.ActionPreset(
+                id=action_id,
+                name=str(item.get("name", "")).strip() or action_id,
+                videos=videos,
+                sound_filename=str(item.get("sound", "")).strip(),
+            )
+        core.ACTION_PRESETS.clear()
+        core.ACTION_PRESETS.update(presets)
+        core.save_action_presets(presets)
+        return self.actions()
+
     def save_mappings(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         mapping: dict[str, tuple[str, int, str, str]] = {}
+        migrated_presets = False
         for item in items:
             gift = str(item.get("gift", "")).strip().lower()
-            action = str(item.get("action", "")).strip()
+            action = str(item.get("action_id") or item.get("action", "")).strip()
             if not gift or not action:
                 continue
+            if action not in core.ACTION_PRESETS:
+                # Convert a legacy direct-media assignment into a reusable
+                # action preset the next time the mapping is saved.
+                videos = [value for value in core.parse_video_filenames(item.get("videos") or action) if value]
+                action_id = self._action_id(f"gift_{gift}")
+                suffix = 2
+                base_id = action_id
+                while action_id in core.ACTION_PRESETS:
+                    existing = core.ACTION_PRESETS[action_id]
+                    if existing.videos == videos:
+                        break
+                    action_id = f"{base_id}_{suffix}"
+                    suffix += 1
+                core.ACTION_PRESETS[action_id] = core.ActionPreset(
+                    id=action_id,
+                    name=str(item.get("action_name", "")).strip() or gift.title(),
+                    videos=videos,
+                    sound_filename=str(item.get("sound", "")).strip(),
+                )
+                action = action_id
+                migrated_presets = True
             mapping[gift] = (action, int(item.get("priority", 1)), str(item.get("sound", "")).strip(), "main")
+        if migrated_presets:
+            core.save_action_presets(core.ACTION_PRESETS)
         core.GIFT_MAPPING.clear()
         core.GIFT_MAPPING.update(mapping)
         core.save_gift_mapping(mapping)
@@ -307,6 +369,8 @@ class BackendRequestHandler(BaseHTTPRequestHandler):
                 self._json(runtime.config())
             elif parsed.path == "/api/mappings":
                 self._json(runtime.mappings())
+            elif parsed.path == "/api/actions":
+                self._json(runtime.actions())
             elif parsed.path == "/api/logs":
                 after = int(parse_qs(parsed.query).get("after", ["0"])[0])
                 self._json(runtime.log_handler.snapshot(after))
@@ -342,6 +406,11 @@ class BackendRequestHandler(BaseHTTPRequestHandler):
                 if not isinstance(items, list):
                     raise ValueError("items must be a list")
                 result = runtime.save_mappings(items)
+            elif self.path == "/api/actions":
+                items = body.get("items", [])
+                if not isinstance(items, list):
+                    raise ValueError("items must be a list")
+                result = runtime.save_actions(items)
             elif self.path == "/api/media/idle":
                 result = {"path": runtime.set_idle_video(str(body.get("path", "")))}
             elif self.path == "/api/shutdown":
