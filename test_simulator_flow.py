@@ -90,7 +90,8 @@ class TestTikTokLiveStreamSimulator(unittest.IsolatedAsyncioTestCase):
 
     async def test_backend_http_api_simulator_control(self) -> None:
         """Giả lập điều khiển từ giao diện điều khiển Electron thông qua REST API."""
-        runtime = backend_mod.BackendRuntime(app=self.app)
+        runtime = backend_mod.BackendRuntime()
+        runtime.app = self.app
         
         # Test API trạng thái hệ thống
         status = runtime.status()
