@@ -71,8 +71,9 @@ OVERLAY_HTML = r"""<!doctype html>
 </head>
 <body>
   <main>
-    <video id="video-a" class="media" autoplay playsinline preload="auto"></video>
-    <video id="video-b" class="media" autoplay playsinline preload="auto"></video>
+    <video id="video-idle" class="media" autoplay playsinline preload="auto"></video>
+    <video id="video-action-a" class="media" autoplay playsinline preload="auto"></video>
+    <video id="video-action-b" class="media" autoplay playsinline preload="auto"></video>
     <img id="image-a" class="media" alt="">
     <img id="image-b" class="media" alt="">
     <audio id="sound" preload="auto"></audio>
@@ -87,7 +88,9 @@ OVERLAY_HTML = r"""<!doctype html>
     const mediaZoom = Number.isFinite(requestedZoom) ? Math.min(1.3, Math.max(1, requestedZoom)) : 1;
     document.documentElement.style.setProperty("--media-fit", mediaFit);
     document.documentElement.style.setProperty("--media-zoom", String(mediaZoom));
-    const videos = [document.querySelector("#video-a"), document.querySelector("#video-b")];
+    const idleVideo = document.querySelector("#video-idle");
+    const actionVideos = [document.querySelector("#video-action-a"), document.querySelector("#video-action-b")];
+    const videos = [idleVideo, ...actionVideos];
     const images = [document.querySelector("#image-a"), document.querySelector("#image-b")];
     const sound = document.querySelector("#sound");
     const status = document.querySelector("#status");
@@ -115,6 +118,7 @@ OVERLAY_HTML = r"""<!doctype html>
       if (element.tagName === "VIDEO") element.pause();
       element.removeAttribute("src");
       delete element.dataset.mode;
+      delete element.dataset.mediaUrl;
       if (element.tagName === "VIDEO") element.load();
     }
 
@@ -164,21 +168,25 @@ OVERLAY_HTML = r"""<!doctype html>
     }
 
     async function prepareMedia(state, mediaUrl) {
-      const pool = state.media_type === "image" ? images : videos;
-      const cachedIdle = state.mode === "idle"
-        ? pool.find((element) => element.dataset.mode === "idle" && element.getAttribute("src"))
-        : null;
-      if (cachedIdle) {
-        if (cachedIdle.tagName === "VIDEO") {
+      const pool = state.media_type === "image"
+        ? images
+        : state.mode === "idle" ? [idleVideo] : actionVideos;
+      const cached = pool.find((element) => element.dataset.mediaUrl === mediaUrl && element.getAttribute("src"));
+      if (cached) {
+        cached.dataset.mode = state.mode;
+        if (cached.tagName === "VIDEO") {
           // Idle kept playing behind the action, so revealing it must not seek.
-          await cachedIdle.play();
+          if (state.mode === "action") cached.currentTime = 0;
+          await cached.play();
+          sendPlaybackEvent("media_ready", state);
         }
-        return cachedIdle;
+        return cached;
       }
       const next = pool.find((element) => element !== activeMedia) || pool[0];
       releaseMedia(next);
       next.style.zIndex = "2";
       next.dataset.mode = state.mode;
+      next.dataset.mediaUrl = mediaUrl;
 
       if (state.media_type === "image") {
         next.src = mediaUrl;
@@ -205,6 +213,20 @@ OVERLAY_HTML = r"""<!doctype html>
       return next;
     }
 
+    function preloadNextAction(mediaUrl) {
+      if (!mediaUrl) return;
+      const alreadyLoaded = actionVideos.find((video) => video.dataset.mediaUrl === mediaUrl && video.getAttribute("src"));
+      if (alreadyLoaded) return;
+      const target = actionVideos.find((video) => video !== activeMedia) || actionVideos[0];
+      releaseMedia(target);
+      target.dataset.mode = "action";
+      target.dataset.mediaUrl = mediaUrl;
+      target.muted = true;
+      target.preload = "auto";
+      target.src = mediaUrl;
+      target.load();
+    }
+
     async function swapMedia(next) {
       const previous = activeMedia;
       videos.forEach((video) => {
@@ -222,8 +244,11 @@ OVERLAY_HTML = r"""<!doctype html>
           const returningToIdle = previous.dataset.mode === "action" && next.dataset.mode === "idle";
           if (returningToIdle) hideActionImmediately(previous);
           else previous.classList.remove("active");
+          const retiredMediaUrl = previous.dataset.mediaUrl;
           setTimeout(() => {
-            if (previous !== activeMedia) releaseMedia(previous);
+            // Don't clear this element if it was already reused to preload the
+            // next queued action during the transition delay.
+            if (previous !== activeMedia && previous.dataset.mediaUrl === retiredMediaUrl) releaseMedia(previous);
           }, 250);
         }
       }
@@ -249,6 +274,7 @@ OVERLAY_HTML = r"""<!doctype html>
           return;
         }
         await swapMedia(next);
+        preloadNextAction(state.next_media_url);
       } catch (error) {
         // A newer idle/action state can pause this element while its play()
         // promise is still pending.  That is an expected transition, not a
@@ -305,6 +331,7 @@ class OverlayState:
         self._lock = threading.Lock()
         self._idle_path = Path(idle_path).resolve() if idle_path else None
         self._action_path: Path | None = None
+        self._next_action_path: Path | None = None
         self._sound_path: Path | None = None
         self._mode = "idle"
         self._label = self._idle_path.name if self._idle_path else "No idle media"
@@ -336,19 +363,27 @@ class OverlayState:
                 self._version += 1
                 self._started_at_ms = self._idle_started_at_ms
 
-    def show_action(self, path: Path, sound_path: Path | None = None, label: str = "") -> None:
+    def show_action(
+        self,
+        path: Path,
+        sound_path: Path | None = None,
+        label: str = "",
+        preload_path: Path | None = None,
+    ) -> None:
         with self._lock:
             self._action_path = Path(path).resolve()
             self._sound_path = Path(sound_path).resolve() if sound_path else None
+            self._next_action_path = Path(preload_path).resolve() if preload_path else None
             self._mode = "action"
             self._label = label or self._action_path.name
             self._version += 1
             self._started_at_ms = int(time.time() * 1000)
 
-    def show_idle(self) -> None:
+    def show_idle(self, preload_path: Path | None = None) -> None:
         with self._lock:
             self._action_path = None
             self._sound_path = None
+            self._next_action_path = Path(preload_path).resolve() if preload_path else None
             self._mode = "idle"
             self._label = self._idle_path.name if self._idle_path else "No idle media"
             self._version += 1
@@ -362,8 +397,10 @@ class OverlayState:
             sound_path = self._sound_path if self._mode == "action" else None
             media_exists = bool(media_path and media_path.is_file())
             sound_exists = bool(sound_path and sound_path.is_file())
+            next_exists = bool(self._next_action_path and self._next_action_path.is_file())
             media_url = self._register_asset(media_path, "media") if media_exists and media_path else ""
             sound_url = self._register_asset(sound_path, "audio") if sound_exists and sound_path else ""
+            next_media_url = self._register_asset(self._next_action_path, "media") if next_exists and self._next_action_path else ""
             payload: dict[str, object] = {
                 "mode": self._mode if media_exists else "empty",
                 "label": self._label,
@@ -372,6 +409,7 @@ class OverlayState:
                 "media_type": "image" if media_path and media_path.suffix.lower() in IMAGE_EXTENSIONS else "video",
                 "media_url": media_url,
                 "sound_url": sound_url,
+                "next_media_url": next_media_url,
             }
             return payload, media_path if media_exists else None, sound_path if sound_exists else None
 
@@ -597,10 +635,16 @@ class LocalOverlayServer:
         self.state.set_idle_path(path)
         self._broadcast_state()
 
-    def show_action(self, path: Path, sound_path: Path | None = None, label: str = "") -> None:
-        self.state.show_action(path, sound_path=sound_path, label=label)
+    def show_action(
+        self,
+        path: Path,
+        sound_path: Path | None = None,
+        label: str = "",
+        preload_path: Path | None = None,
+    ) -> None:
+        self.state.show_action(path, sound_path=sound_path, label=label, preload_path=preload_path)
         self._broadcast_state()
 
-    def show_idle(self) -> None:
-        self.state.show_idle()
+    def show_idle(self, preload_path: Path | None = None) -> None:
+        self.state.show_idle(preload_path=preload_path)
         self._broadcast_state()

@@ -1433,7 +1433,12 @@ class TikTokObsApp:
 
         try:
             if self.overlay:
-                self.overlay.show_action(job.file_path, sound_path=job.sound_path, label=job.gift_name)
+                next_jobs = self.queue.get_items()
+                next_path = next_jobs[0].file_path if next_jobs else None
+                if next_path:
+                    self.overlay.show_action(job.file_path, sound_path=job.sound_path, label=job.gift_name, preload_path=next_path)
+                else:
+                    self.overlay.show_action(job.file_path, sound_path=job.sound_path, label=job.gift_name)
 
             if self.enable_obs:
                 try:
@@ -1479,7 +1484,12 @@ class TikTokObsApp:
                     task.cancel()
             stop_sound_file()
             if self.overlay:
-                self.overlay.show_idle()
+                next_jobs = self.queue.get_items()
+                next_path = next_jobs[0].file_path if next_jobs else None
+                if next_path:
+                    self.overlay.show_idle(preload_path=next_path)
+                else:
+                    self.overlay.show_idle()
             if obs_playing:
                 with contextlib.suppress(Exception):
                     await self.obs.stop_action(target_char=job.target_char)
