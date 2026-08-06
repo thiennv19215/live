@@ -8,6 +8,19 @@ from websocket import WebSocketConnectionClosedException
 import tiktok_obs_controller as core
 
 
+class FakeGift:
+    def __init__(self, *, streakable: bool) -> None:
+        self.name = "rose"
+        self.streakable = streakable
+
+
+class FakeGiftEvent:
+    def __init__(self, *, streakable: bool, streaking: object = None, repeat_end: object = None) -> None:
+        self.gift = FakeGift(streakable=streakable)
+        self.streaking = streaking
+        self.repeat_end = repeat_end
+
+
 class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._original_character_count = core.CHARACTER_COUNT
@@ -44,6 +57,43 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(queue), 0)
 
+    async def test_regular_gift_is_not_suppressed_by_false_repeat_default(self) -> None:
+        event = FakeGiftEvent(streakable=False, repeat_end=0)
+        self.assertTrue(core.should_enqueue_gift_event(event))
+
+    async def test_streak_gift_only_enqueues_after_streak_finishes(self) -> None:
+        self.assertFalse(core.should_enqueue_gift_event(FakeGiftEvent(streakable=True, streaking=True)))
+        self.assertTrue(core.should_enqueue_gift_event(FakeGiftEvent(streakable=True, streaking=False)))
+
+    async def test_legacy_repeat_end_accepts_integer_flags(self) -> None:
+        self.assertFalse(core.should_enqueue_gift_event(FakeGiftEvent(streakable=True, repeat_end=0)))
+        self.assertTrue(core.should_enqueue_gift_event(FakeGiftEvent(streakable=True, repeat_end=1)))
+
+    async def test_direct_studio_mode_never_calls_obs_for_action(self) -> None:
+        class Overlay:
+            def __init__(self) -> None:
+                self.states: list[str] = []
+
+            def show_action(self, *_args: object, **_kwargs: object) -> None:
+                self.states.append("action")
+
+            def show_idle(self) -> None:
+                self.states.append("idle")
+
+        overlay = Overlay()
+        app = core.TikTokObsApp(mock_mode=False, enable_obs=False, overlay=overlay)
+        job = core.GiftJob("rose", Path("rose.mp4"), priority=1)
+        with (
+            patch.object(core, "get_video_duration", return_value=0.01),
+            patch.object(app.obs, "play_action", new=AsyncMock()) as play,
+            patch.object(app.obs, "stop_action", new=AsyncMock()) as stop,
+        ):
+            await app._play_job(job)
+
+        play.assert_not_awaited()
+        stop.assert_not_awaited()
+        self.assertEqual(overlay.states, ["action", "idle"])
+
     async def test_queue_clear(self) -> None:
         """Kiểm tra tính năng xóa queue."""
         job1 = core.GiftJob("rose", Path("cho_1_sui.mp4"), priority=1)
@@ -57,6 +107,37 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         cleared_count = queue.clear()
         self.assertEqual(cleared_count, 2)
         self.assertEqual(len(queue), 0)
+
+    async def test_clear_all_stops_current_action_and_returns_to_idle(self) -> None:
+        class Overlay:
+            def __init__(self) -> None:
+                self.states: list[str] = []
+
+            def show_action(self, *_args: object, **_kwargs: object) -> None:
+                self.states.append("action")
+
+            def show_idle(self) -> None:
+                self.states.append("idle")
+
+        overlay = Overlay()
+        app = core.TikTokObsApp(mock_mode=True, enable_obs=False, overlay=overlay)
+        worker = asyncio.create_task(app.worker())
+        try:
+            with patch.object(core, "get_video_duration", return_value=30.0):
+                await app.queue.put(core.GiftJob("rose", Path(__file__), priority=1))
+                for _ in range(100):
+                    if app.current_job is not None:
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertIsNotNone(app.current_job)
+                self.assertEqual(await app.clear_all_playback(), 1)
+                self.assertIsNone(app.current_job)
+                self.assertEqual(len(app.queue), 0)
+                self.assertEqual(overlay.states[-1], "idle")
+        finally:
+            worker.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await worker
 
     async def test_gift_mapping_resolution(self) -> None:
         """Kiểm tra tra cứu mapping quà từ dictionary."""

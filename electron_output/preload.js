@@ -1,10 +1,18 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+const backendArg = process.argv.find((value) => value.startsWith("--backend-url="));
+const backendUrl = backendArg ? backendArg.slice("--backend-url=".length) : "http://127.0.0.1:8766";
+
 contextBridge.exposeInMainWorld("desktop", {
-  backendUrl: "http://127.0.0.1:8766",
+  backendUrl,
   openOutput: (options) => ipcRenderer.invoke("output:open", options),
   closeOutput: () => ipcRenderer.invoke("output:close"),
   getOutputStatus: () => ipcRenderer.invoke("output:status"),
+  onOutputClosed: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("output:closed", listener);
+    return () => ipcRenderer.removeListener("output:closed", listener);
+  },
   pickMedia: (options = {}) => ipcRenderer.invoke("dialog:pick-media", options),
   openVideosFolder: () => ipcRenderer.invoke("shell:open-videos"),
   minimize: () => ipcRenderer.send("window:minimize"),

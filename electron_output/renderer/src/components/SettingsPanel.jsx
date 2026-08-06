@@ -23,9 +23,10 @@ export function SettingsPanel({ config, setConfig, status, post, onNotice, compa
     await post("/api/system/start", {
       mock_mode: Boolean(config.mock_mode),
       enable_tiktok: Boolean(config.enable_tiktok),
+      enable_obs: Boolean(config.enable_obs),
       config,
     });
-    onNotice(config.mock_mode ? "Preview nội bộ đã sẵn sàng" : "Đang kết nối TikTok và OBS");
+    onNotice(config.mock_mode ? "Preview nội bộ đã sẵn sàng" : config.enable_obs ? "Đang kết nối TikTok và OBS" : "TikTok Studio trực tiếp đã sẵn sàng");
   };
 
   const selectSource = (mode) => {
@@ -77,6 +78,7 @@ export function SettingsPanel({ config, setConfig, status, post, onNotice, compa
       <div className="toggle-row">
         <label><input type="checkbox" checked={Boolean(config.mock_mode)} onChange={(event) => update("mock_mode", event.target.checked)} /> Preview nội bộ</label>
         <label><input type="checkbox" checked={Boolean(config.enable_tiktok)} onChange={(event) => update("enable_tiktok", event.target.checked)} /> TikTok realtime</label>
+        <label><input type="checkbox" checked={Boolean(config.enable_obs)} onChange={(event) => update("enable_obs", event.target.checked)} /> Đồng bộ OBS</label>
       </div>
 
       {!compact ? <div className="form-stack">

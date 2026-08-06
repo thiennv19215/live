@@ -51,7 +51,10 @@ SCENE_NAME = "Main Scene"
 
 IDLE_SOURCE_NAME = "Idle_Source"
 ACTION_SOURCE_NAME = "Action_Source"
-APP_DIRECTORY = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+APP_DIRECTORY = Path(
+    os.environ.get("TIKTOK_LIVE_DATA_DIR")
+    or (Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent)
+).resolve()
 VIDEO_DIRECTORY = APP_DIRECTORY / "videos"
 IDLE_VIDEO_PATH_1 = VIDEO_DIRECTORY / "idle_loop_1.mp4"
 IDLE_VIDEO_PATH_2 = VIDEO_DIRECTORY / "idle_loop_2.mp4"
@@ -59,12 +62,46 @@ IDLE_VIDEO_PATH_3 = VIDEO_DIRECTORY / "idle_loop_3.mp4"
 IDLE_VIDEO_PATH_4 = VIDEO_DIRECTORY / "idle_loop_4.mp4"
 IDLE_VIDEO_PATH = IDLE_VIDEO_PATH_1
 ACTION_DEFAULT_DURATION = 10.0
+# Give the overlay/decoder a short idle window before the next queued action.
+QUEUE_ACTION_COOLDOWN = 2.0
 TIKTOK_RECONNECT_DELAY = 5.0
 OBS_RECONNECT_DELAY = 3.0
 
 import json
 
 OBS_CONFIG_FILE = APP_DIRECTORY / "obs_config.json"
+
+
+def atomic_write_json(path: Path, data: Any) -> None:
+    """Write JSON without leaving a partially-written configuration file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            temporary.unlink()
+
+
+def media_reference(path_value: str | Path) -> str:
+    """Prefer a portable path relative to the managed videos directory."""
+    raw = str(path_value).strip()
+    if not raw:
+        return ""
+    path = Path(raw)
+    try:
+        return str(path.resolve().relative_to(VIDEO_DIRECTORY.resolve()))
+    except (OSError, ValueError):
+        return raw
+
+
+def resolve_configured_media_path(path_value: str | Path) -> Path:
+    path = Path(str(path_value))
+    return path if path.is_absolute() else VIDEO_DIRECTORY / path
 
 
 def load_obs_config() -> dict[str, Any]:
@@ -90,11 +127,7 @@ def load_obs_config() -> dict[str, Any]:
 
 
 def save_obs_config(config: dict[str, Any]) -> None:
-    try:
-        with open(OBS_CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    atomic_write_json(OBS_CONFIG_FILE, config)
 
 
 _saved_obs_cfg = load_obs_config()
@@ -116,7 +149,7 @@ for _idx in range(1, CHARACTER_COUNT + 1):
         _configured_path = _saved_idle_paths.get(str(_idx), VIDEO_DIRECTORY / f"__unassigned_idle_{_idx}__.mp4")
     else:
         _configured_path = _legacy_path or (VIDEO_DIRECTORY / f"idle_loop_{_idx}.mp4")
-    IDLE_VIDEO_PATHS[_idx] = Path(str(_configured_path))
+    IDLE_VIDEO_PATHS[_idx] = resolve_configured_media_path(_configured_path)
 IDLE_VIDEO_PATH_1 = IDLE_VIDEO_PATHS.get(1, IDLE_VIDEO_PATH_1)
 IDLE_VIDEO_PATH_2 = IDLE_VIDEO_PATHS.get(2, IDLE_VIDEO_PATH_2)
 IDLE_VIDEO_PATH_3 = IDLE_VIDEO_PATHS.get(3, IDLE_VIDEO_PATH_3)
@@ -246,21 +279,17 @@ def load_action_presets() -> dict[str, ActionPreset]:
 
 
 def save_action_presets(presets: dict[str, ActionPreset | dict[str, Any]]) -> None:
-    try:
-        data = {}
-        for aid, preset in presets.items():
-            if isinstance(preset, ActionPreset):
-                data[aid] = {
-                    "name": preset.name,
-                    "videos": preset.videos,
-                    "sound_filename": preset.sound_filename,
-                }
-            elif isinstance(preset, dict):
-                data[aid] = preset
-        with open(ACTION_PRESETS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    data = {}
+    for aid, preset in presets.items():
+        if isinstance(preset, ActionPreset):
+            data[aid] = {
+                "name": preset.name,
+                "videos": preset.videos,
+                "sound_filename": preset.sound_filename,
+            }
+        elif isinstance(preset, dict):
+            data[aid] = preset
+    atomic_write_json(ACTION_PRESETS_FILE, data)
 
 
 ACTION_PRESETS = load_action_presets()
@@ -317,17 +346,14 @@ def load_gift_mapping() -> dict[str, tuple[str, int, str, str]]:
 
 
 def save_gift_mapping(mapping: dict[str, Any]) -> None:
-    try:
-        data = {}
-        for k, v in mapping.items():
-            fn = str(v[0]).strip()
-            prio = int(v[1])
-            sound_fn = str(v[2]) if len(v) > 2 else ""
-            data[str(k).lower().strip()] = [fn, prio, sound_fn, "main"]
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    data = {}
+    for k, v in mapping.items():
+        videos = [media_reference(item) for item in parse_video_filenames(v[0])]
+        fn = ", ".join(item for item in videos if item)
+        prio = int(v[1])
+        sound_fn = media_reference(v[2]) if len(v) > 2 else ""
+        data[str(k).lower().strip()] = [fn, prio, sound_fn, "main"]
+    atomic_write_json(CONFIG_FILE, data)
 
 
 GIFT_MAPPING = load_gift_mapping()
@@ -453,11 +479,34 @@ class PriorityGiftQueue:
         self._unfinished_tasks = 0
         return count
 
+    async def clear_async(self) -> int:
+        async with self._condition:
+            return self.clear()
+
     def get_items(self) -> list[GiftJob]:
         return list(self._items)
 
     def __len__(self) -> int:
         return len(self._items)
+
+
+def should_enqueue_gift_event(event: GiftEvent) -> bool:
+    """Return True once per gift, waiting for a streak to finish when needed.
+
+    TikTokLive versions expose streak state in slightly different forms.  Only
+    consult repeat/streak flags for streakable gifts; regular gifts must still
+    be handled even when a protobuf default exposes ``repeat_end`` as false/0.
+    """
+    gift = getattr(event, "gift", None)
+    if not bool(getattr(gift, "streakable", False)):
+        return True
+
+    streaking = getattr(event, "streaking", None)
+    if streaking is not None:
+        return not bool(streaking)
+
+    repeat_end = getattr(event, "repeat_end", False)
+    return bool(repeat_end)
 
 
 class ObsController:
@@ -1190,7 +1239,17 @@ def get_video_duration(video_path: Path) -> float:
             "default=noprint_wrappers=1:nokey=1",
             str(video_path),
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=2.0)
+        # ffprobe is launched for every action.  A windowed PyInstaller app
+        # would otherwise briefly create a visible console on Windows.
+        run_options: dict[str, Any] = {
+            "capture_output": True,
+            "text": True,
+            "check": True,
+            "timeout": 2.0,
+        }
+        if os.name == "nt":
+            run_options["creationflags"] = subprocess.CREATE_NO_WINDOW
+        result = subprocess.run(cmd, **run_options)
         duration = float(result.stdout.strip())
         return max(duration, 0.1)
     except (FileNotFoundError, ValueError, subprocess.SubprocessError, OSError):
@@ -1202,20 +1261,22 @@ class TikTokObsApp:
         self,
         mock_mode: bool = False,
         enable_tiktok: bool = False,
+        enable_obs: bool = True,
         overlay: LocalOverlayServer | None = None,
     ) -> None:
         self.mock_mode = mock_mode
         self.enable_tiktok = enable_tiktok
+        self.enable_obs = enable_obs
         self.queue = PriorityGiftQueue()
         self.obs = ObsController(mock_mode=mock_mode)
         self.overlay = overlay
         self._stop_event = asyncio.Event()
         self._current_interrupt: asyncio.Event | None = None
+        self._last_job_was_skipped = False
         self.is_tiktok_connected: bool = False
         self.current_job: GiftJob | None = None
         self.current_job_start_time: float = 0.0
         self.current_job_duration: float = 0.0
-
         self.client = TikTokLiveClient(unique_id=TIKTOK_USERNAME)
         self.client.add_listener(ConnectEvent, self.on_connect)
         self.client.add_listener(DisconnectEvent, self.on_disconnect)
@@ -1230,7 +1291,7 @@ class TikTokObsApp:
         LOGGER.warning("TikTok Live da ngat ket noi; se thu ket noi lai")
 
     async def on_gift(self, event: GiftEvent) -> None:
-        if getattr(event, "repeat_end", True) is False:
+        if not should_enqueue_gift_event(event):
             return
 
         gift_name = str(getattr(event.gift, "name", "")).strip().lower()
@@ -1330,12 +1391,34 @@ class TikTokObsApp:
             LOGGER.info("Nguoi dung yeu cau Bo Qua (Skip) video hien tai")
             self._current_interrupt.set()
 
+    async def clear_all_playback(self) -> int:
+        """Clear pending jobs and wait until the current action returns to idle."""
+        cleared = await self.queue.clear_async()
+        had_current = self.current_job is not None
+        self.skip_current()
+        if had_current:
+            try:
+                await asyncio.wait_for(self._wait_until_idle(), timeout=2.0)
+            except asyncio.TimeoutError:
+                LOGGER.warning("Action hien tai chua dung xong sau khi xoa hang doi")
+        return cleared + int(had_current)
+
+    async def _wait_until_idle(self) -> None:
+        while self.current_job is not None:
+            await asyncio.sleep(0.01)
+
     async def _play_job(self, job: GiftJob) -> None:
         interrupt = asyncio.Event()
+        obs_playing = False
+        self._last_job_was_skipped = False
         self._current_interrupt = interrupt
         self.current_job = job
         self.current_job_start_time = asyncio.get_event_loop().time()
-        self.current_job_duration = get_video_duration(job.file_path)
+        self.current_job_duration = ACTION_DEFAULT_DURATION
+        # Start probing in parallel so playback and Skip react immediately.
+        # ffprobe can be slow on first launch in a packaged Windows app.
+        duration_task = asyncio.create_task(asyncio.to_thread(get_video_duration, job.file_path))
+        interrupt_task = asyncio.create_task(interrupt.wait())
 
         await self.update_queue_display()
 
@@ -1343,40 +1426,60 @@ class TikTokObsApp:
             if self.overlay:
                 self.overlay.show_action(job.file_path, sound_path=job.sound_path, label=job.gift_name)
 
-            obs_playing = False
-            try:
-                await self.obs.play_action(job.file_path, sound_path=job.sound_path, target_char=job.target_char)
-                obs_playing = True
-            except Exception as exc:
-                if not self.overlay:
-                    raise
-                LOGGER.warning("OBS khong phat duoc action; tiep tuc bang Browser Overlay: %s", exc)
+            if self.enable_obs:
+                try:
+                    await self.obs.play_action(job.file_path, sound_path=job.sound_path, target_char=job.target_char)
+                    obs_playing = True
+                except Exception as exc:
+                    if not self.overlay:
+                        raise
+                    LOGGER.warning("OBS khong phat duoc action; tiep tuc bang Browser Overlay: %s", exc)
 
-            playback_task = asyncio.create_task(
-                self.obs.wait_for_action_end(job.target_char, self.current_job_duration)
-                if obs_playing
-                else asyncio.sleep(self.current_job_duration)
+            metadata_done, _ = await asyncio.wait(
+                {duration_task, interrupt_task},
+                return_when=asyncio.FIRST_COMPLETED,
             )
-            interrupt_task = asyncio.create_task(interrupt.wait())
+            if interrupt_task in metadata_done:
+                self._last_job_was_skipped = True
+                LOGGER.info("Video %s da bi bo qua theo yeu cau nguoi dung", job.gift_name)
+                return
+
+            self.current_job_duration = duration_task.result()
+            elapsed = max(0.0, asyncio.get_running_loop().time() - self.current_job_start_time)
+            remaining_duration = max(0.1, self.current_job_duration - elapsed)
+            playback_task = asyncio.create_task(
+                self.obs.wait_for_action_end(job.target_char, remaining_duration)
+                if obs_playing
+                else asyncio.sleep(remaining_duration)
+            )
             done, pending = await asyncio.wait(
                 {playback_task, interrupt_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
             for task in pending:
                 task.cancel()
+            for task in pending:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             if interrupt_task in done:
+                self._last_job_was_skipped = True
                 LOGGER.info("Video %s da bi bo qua theo yeu cau nguoi dung", job.gift_name)
         finally:
+            for task in (duration_task, interrupt_task):
+                if not task.done():
+                    task.cancel()
             stop_sound_file()
             if self.overlay:
                 self.overlay.show_idle()
+            if obs_playing:
+                with contextlib.suppress(Exception):
+                    await self.obs.stop_action(target_char=job.target_char)
             self._current_interrupt = None
             self.current_job = None
             self.current_job_start_time = 0.0
             self.current_job_duration = 0.0
-            await self.update_queue_display()
             with contextlib.suppress(Exception):
-                await self.obs.stop_action(target_char=job.target_char)
+                await self.update_queue_display()
 
     async def worker(self) -> None:
         while not self._stop_event.is_set():
@@ -1388,6 +1491,12 @@ class TikTokObsApp:
                 LOGGER.exception("Loi khi xu ly qua %s", job.gift_name)
             finally:
                 self.queue.task_done()
+            if len(self.queue) and not self._last_job_was_skipped and not self._stop_event.is_set():
+                LOGGER.info("Cho %.1f giay o video nen truoc action tiep theo", QUEUE_ACTION_COOLDOWN)
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=QUEUE_ACTION_COOLDOWN)
+                except asyncio.TimeoutError:
+                    pass
 
     async def tiktok_loop(self) -> None:
         if self.mock_mode:
@@ -1413,12 +1522,15 @@ class TikTokObsApp:
                 await asyncio.sleep(TIKTOK_RECONNECT_DELAY)
 
     async def run(self) -> None:
-        try:
-            await self.obs.connect()
-            await self.obs.sync_all_idle_videos()
-            await self.update_queue_display()
-        except Exception as exc:
-            LOGGER.error("Auto-setup OBS khi khoi dong: %s", exc)
+        if self.enable_obs:
+            try:
+                await self.obs.connect()
+                await self.obs.sync_all_idle_videos()
+                await self.update_queue_display()
+            except Exception as exc:
+                LOGGER.error("Auto-setup OBS khi khoi dong: %s", exc)
+        else:
+            LOGGER.info("Che do TikTok Studio truc tiep: chi phat Browser Overlay, OBS dang tat")
 
         worker_task = asyncio.create_task(self.worker())
         LOGGER.info("Tien trinh xu ly Hang Cho (Worker Task) da san sang hoat dong!")
@@ -1428,17 +1540,21 @@ class TikTokObsApp:
         finally:
             self._stop_event.set()
             self.skip_current()
+            if self.enable_tiktok and not self.mock_mode:
+                with contextlib.suppress(Exception):
+                    await self.client.disconnect()
             worker_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await worker_task
             cleared = self.queue.clear()
             if cleared:
                 LOGGER.info("Da xoa %s mon con lai trong hang cho khi dong app", cleared)
-            with contextlib.suppress(Exception):
-                await self.obs.update_queue_text(None, [])
-            with contextlib.suppress(Exception):
-                await self.obs.reset_obs_display_state()
-            await self.obs.close()
+            if self.enable_obs:
+                with contextlib.suppress(Exception):
+                    await self.obs.update_queue_text(None, [])
+                with contextlib.suppress(Exception):
+                    await self.obs.reset_obs_display_state()
+                await self.obs.close()
 
 
 async def main() -> None:

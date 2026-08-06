@@ -4,6 +4,8 @@ __pycache__/
 build/
 dist/
 node_modules/
+.dev-python/
+*-dev*.log
 *.egg-info/
 .idea/
 .vscode/

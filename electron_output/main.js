@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const http = require("node:http");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
@@ -7,7 +8,12 @@ const { fitToWorkArea, parseOptions } = require("./window-options");
 
 const logPath = path.join(process.env.TEMP || process.cwd(), "tiktok-live-control-room.log");
 const isOutputOnly = process.argv.some((value) => value === "--output-only" || value === "--url" || value.startsWith("--url="));
-const backendUrl = "http://127.0.0.1:8766";
+const isDevRenderer = Boolean(process.env.ELECTRON_RENDERER_URL);
+const backendPort = Number(process.env.BACKEND_PORT || (isDevRenderer ? 8776 : 8766));
+const backendUrl = `http://127.0.0.1:${backendPort}`;
+if (isDevRenderer) {
+  app.setPath("userData", path.join(app.getPath("appData"), "TikTok Live Control Room Dev"));
+}
 let controllerWindow = null;
 let outputWindow = null;
 let backendProcess = null;
@@ -18,9 +24,12 @@ function log(message) {
   fs.appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
 }
 
+log(`startup argv=${JSON.stringify(process.argv)} outputOnly=${isOutputOnly} dev=${isDevRenderer}`);
+
 process.on("uncaughtException", (error) => log(`uncaughtException: ${error.stack || error}`));
 process.on("unhandledRejection", (error) => log(`unhandledRejection: ${error?.stack || error}`));
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+app.disableHardwareAcceleration();
 app.setName(isOutputOnly ? "TikTok Live Output" : "TikTok Live Control Room");
 app.setAppUserModelId("io.streamtoearn.tiktok-live-control-room");
 
@@ -58,6 +67,16 @@ function secureLocalNavigation(window) {
   window.webContents.on("will-navigate", (event, targetUrl) => {
     if (!targetUrl.startsWith("file:") && !isAllowedUrl(targetUrl)) event.preventDefault();
   });
+}
+
+function loadUrlWithTimeout(window, url, timeoutMs = 8000) {
+  let timer;
+  return Promise.race([
+    window.loadURL(url),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Output load timed out after ${timeoutMs}ms`)), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 async function createOutputWindow(options, standalone = false) {
@@ -108,9 +127,18 @@ async function createOutputWindow(options, standalone = false) {
   outputWindow.once("ready-to-show", () => outputWindow?.show());
   outputWindow.on("closed", () => {
     outputWindow = null;
+    if (controllerWindow && !controllerWindow.isDestroyed()) {
+      controllerWindow.webContents.send("output:closed");
+    }
     if (standalone) app.quit();
   });
-  await outputWindow.loadURL(options.url);
+  try {
+    await loadUrlWithTimeout(outputWindow, options.url);
+  } catch (error) {
+    outputWindow?.destroy();
+    outputWindow = null;
+    throw error;
+  }
   return { open: true, title: outputWindow.getTitle() };
 }
 
@@ -118,18 +146,80 @@ function releaseDirectory() {
   return process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(process.execPath);
 }
 
+function runtimeDataDirectory() {
+  return app.isPackaged ? app.getPath("userData") : path.resolve(__dirname, "..");
+}
+
+function seedRuntimeData() {
+  const targetRoot = runtimeDataDirectory();
+  fs.mkdirSync(targetRoot, { recursive: true });
+  for (const name of ["gift_config.json", "obs_config.json"]) {
+    const source = path.join(releaseDirectory(), name);
+    const target = path.join(targetRoot, name);
+    if (!fs.existsSync(target) && fs.existsSync(source)) fs.copyFileSync(source, target);
+  }
+  const sourceVideos = path.join(releaseDirectory(), "videos");
+  const targetVideos = path.join(targetRoot, "videos");
+  fs.mkdirSync(targetVideos, { recursive: true });
+  if (fs.existsSync(sourceVideos)) fs.cpSync(sourceVideos, targetVideos, { recursive: true, force: false });
+}
+
 function videosDirectory() {
-  return app.isPackaged ? path.join(releaseDirectory(), "videos") : path.resolve(__dirname, "..", "videos");
+  return path.join(runtimeDataDirectory(), "videos");
+}
+
+function fileDigest(filePath) {
+  const hash = crypto.createHash("sha256");
+  const descriptor = fs.openSync(filePath, "r");
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    let bytesRead;
+    do {
+      bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+      if (bytesRead) hash.update(buffer.subarray(0, bytesRead));
+    } while (bytesRead);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  return hash.digest("hex");
+}
+
+function importMedia(sourcePath) {
+  const source = path.resolve(sourcePath);
+  const targetDirectory = videosDirectory();
+  fs.mkdirSync(targetDirectory, { recursive: true });
+  const parsed = path.parse(source);
+  let target = path.join(targetDirectory, parsed.base);
+  if (path.resolve(target).toLowerCase() === source.toLowerCase()) return source;
+  let suffix = 2;
+  while (fs.existsSync(target)) {
+    const existing = fs.statSync(target);
+    const incoming = fs.statSync(source);
+    if (existing.size === incoming.size) {
+      if (fileDigest(target) === fileDigest(source)) return target;
+    }
+    target = path.join(targetDirectory, `${parsed.name}-${suffix}${parsed.ext}`);
+    suffix += 1;
+  }
+  fs.copyFileSync(source, target);
+  return target;
 }
 
 function startBackend() {
-  const packagedBackend = path.join(releaseDirectory(), "TikTokLiveBackend.exe");
+  const packagedBackend = path.join(process.resourcesPath, "TikTokLiveBackend", "TikTokLiveBackend.exe");
   if (app.isPackaged && fs.existsSync(packagedBackend)) {
-    backendProcess = spawn(packagedBackend, ["--port", "8766"], { windowsHide: true, stdio: "ignore" });
+    backendProcess = spawn(packagedBackend, ["--port", String(backendPort)], {
+      cwd: releaseDirectory(),
+      env: { ...process.env, TIKTOK_LIVE_DATA_DIR: runtimeDataDirectory() },
+      windowsHide: true,
+      stdio: "ignore",
+    });
   } else {
     const repoRoot = path.resolve(__dirname, "..");
-    backendProcess = spawn("python", [path.join(repoRoot, "tiktok_backend.py"), "--port", "8766"], {
+    const backendEnv = { ...process.env };
+    backendProcess = spawn(process.env.PYTHON_EXECUTABLE || "python", [path.join(repoRoot, "tiktok_backend.py"), "--port", String(backendPort)], {
       cwd: repoRoot,
+      env: backendEnv,
       windowsHide: true,
       stdio: "ignore",
     });
@@ -164,7 +254,8 @@ function registerControllerIpc() {
       ],
     });
     if (result.canceled) return multiple ? [] : "";
-    return multiple ? result.filePaths : result.filePaths[0];
+    const selected = options.copyToLibrary ? result.filePaths.map(importMedia) : result.filePaths;
+    return multiple ? selected : selected[0];
   });
   ipcMain.handle("shell:open-videos", () => shell.openPath(videosDirectory()));
   ipcMain.on("window:minimize", () => controllerWindow?.minimize());
@@ -176,6 +267,7 @@ function registerControllerIpc() {
 }
 
 async function createControllerWindow() {
+  seedRuntimeData();
   startBackend();
   registerControllerIpc();
   const workArea = screen.getPrimaryDisplay().workAreaSize;
@@ -189,10 +281,11 @@ async function createControllerWindow() {
     center: true,
     frame: false,
     backgroundColor: "#071018",
-    show: false,
+    show: true,
     title: "TikTok Live Control Room",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
+      additionalArguments: [`--backend-url=${backendUrl}`],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -201,13 +294,27 @@ async function createControllerWindow() {
   controllerWindow.setMenu(null);
   secureLocalNavigation(controllerWindow);
   controllerWindow.once("ready-to-show", () => controllerWindow?.show());
+  const visibilityWatchdog = setInterval(() => {
+    if (controllerWindow && !controllerWindow.isDestroyed() && !controllerWindow.isVisible() && !controllerWindow.isMinimized()) {
+      controllerWindow.show();
+      controllerWindow.focus();
+    }
+  }, 1000);
   controllerWindow.on("closed", () => {
+    clearInterval(visibilityWatchdog);
     controllerWindow = null;
     if (!quitting) app.quit();
   });
   const devUrl = process.env.ELECTRON_RENDERER_URL;
   if (devUrl) await controllerWindow.loadURL(devUrl);
   else await controllerWindow.loadFile(path.join(__dirname, "renderer", "dist", "index.html"));
+  // Some Windows GPU/frameless combinations do not emit ready-to-show even
+  // though the renderer has finished loading. Always reveal the controller
+  // after navigation so dev startup cannot remain hidden in the taskbar.
+  if (controllerWindow && !controllerWindow.isDestroyed()) {
+    controllerWindow.show();
+    controllerWindow.focus();
+  }
 }
 
 app.whenReady().then(async () => {

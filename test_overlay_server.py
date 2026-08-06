@@ -37,6 +37,7 @@ class TestLocalOverlayServer(unittest.TestCase):
             idle_state = json.load(response)
         self.assertEqual(idle_state["mode"], "idle")
         self.assertEqual(idle_state["media_url"], "/media/current")
+        self.assertIsInstance(idle_state["started_at_ms"], int)
 
         self.server.show_action(self.action_path, self.sound_path, label="rose")
         with urlopen(f"http://{self.server.host}:{self.server.port}/api/state", timeout=2) as response:
@@ -44,6 +45,7 @@ class TestLocalOverlayServer(unittest.TestCase):
         self.assertEqual(action_state["mode"], "action")
         self.assertEqual(action_state["label"], "rose")
         self.assertEqual(action_state["sound_url"], "/audio/current")
+        self.assertGreaterEqual(action_state["started_at_ms"], idle_state["started_at_ms"])
 
     def test_supports_http_range_requests_for_video(self) -> None:
         request = Request(
@@ -54,6 +56,17 @@ class TestLocalOverlayServer(unittest.TestCase):
             self.assertEqual(response.status, 206)
             self.assertEqual(response.headers["Content-Range"], f"bytes 2-5/{self.idle_path.stat().st_size}")
             self.assertEqual(response.read(), b"le-v")
+
+    def test_supports_suffix_range_used_for_mp4_metadata(self) -> None:
+        request = Request(
+            f"http://{self.server.host}:{self.server.port}/media/current",
+            headers={"Range": "bytes=-4"},
+        )
+        with urlopen(request, timeout=2) as response:
+            size = self.idle_path.stat().st_size
+            self.assertEqual(response.status, 206)
+            self.assertEqual(response.headers["Content-Range"], f"bytes {size - 4}-{size - 1}/{size}")
+            self.assertEqual(response.read(), b"data")
 
     def test_second_instance_uses_a_different_port(self) -> None:
         second = LocalOverlayServer(self.idle_path, port=self.server.port)
@@ -85,7 +98,9 @@ class TestOverlayPlaybackIntegration(unittest.IsolatedAsyncioTestCase):
         overlay.show_action.assert_called_once_with(job.file_path, sound_path=None, label="rose")
         overlay.show_idle.assert_called_once_with()
         app.obs.wait_for_action_end.assert_not_awaited()
-        app.obs.stop_action.assert_awaited_once()
+        # Do not reconnect just to stop a source that never started. This keeps
+        # direct TikTok Studio playback gapless when OBS is offline.
+        app.obs.stop_action.assert_not_awaited()
 
 
 if __name__ == "__main__":

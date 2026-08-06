@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import threading
@@ -91,6 +92,9 @@ class BackendRuntime:
             "idle_source_name",
             "action_source_name",
             "output_ratio",
+            "mock_mode",
+            "enable_tiktok",
+            "enable_obs",
         }
         for key in allowed:
             if key in values:
@@ -138,26 +142,43 @@ class BackendRuntime:
         core.save_gift_mapping(mapping)
         return self.mappings()
 
-    async def _start_app(self, mock_mode: bool, enable_tiktok: bool) -> None:
+    async def _start_app(self, mock_mode: bool, enable_tiktok: bool, enable_obs: bool) -> None:
         if self.app_task and not self.app_task.done():
             return
-        self.app = core.TikTokObsApp(mock_mode=mock_mode, enable_tiktok=enable_tiktok, overlay=self.overlay)
+        self.app = core.TikTokObsApp(
+            mock_mode=mock_mode,
+            enable_tiktok=enable_tiktok,
+            enable_obs=enable_obs,
+            overlay=self.overlay,
+        )
         self.started_at = time.monotonic()
         self.app_task = asyncio.create_task(self.app.run())
+
+    async def _stop_app(self) -> None:
+        task = self.app_task
+        if task and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        if self.app_task is task:
+            self.app_task = None
+            self.app = None
 
     def start_system(self, payload: dict[str, Any]) -> None:
         if isinstance(payload.get("config"), dict):
             self.update_config(payload["config"])
         future = asyncio.run_coroutine_threadsafe(
-            self._start_app(bool(payload.get("mock_mode")), bool(payload.get("enable_tiktok"))),
+            self._start_app(
+                bool(payload.get("mock_mode")),
+                bool(payload.get("enable_tiktok")),
+                bool(payload.get("enable_obs", False)),
+            ),
             self.loop,
         )
         future.result(timeout=5)
 
     def stop_system(self) -> None:
-        task = self.app_task
-        if task and not task.done():
-            self.loop.call_soon_threadsafe(task.cancel)
+        self.submit(self._stop_app())
 
     def submit(self, coroutine: Any) -> Any:
         return asyncio.run_coroutine_threadsafe(coroutine, self.loop).result(timeout=5)
@@ -167,12 +188,19 @@ class BackendRuntime:
             raise RuntimeError("Hệ thống chưa chạy")
         self.submit(self.app.enqueue_gift(gift))
 
-    def skip(self) -> None:
-        if self.app:
-            self.loop.call_soon_threadsafe(self.app.skip_current)
+    def enqueue_gifts(self, gift: str, count: int) -> int:
+        if not self.app:
+            raise RuntimeError("Hệ thống chưa chạy")
+
+        async def enqueue_batch() -> int:
+            for _ in range(count):
+                await self.app.enqueue_gift(gift)
+            return count
+
+        return int(self.submit(enqueue_batch()))
 
     def clear_queue(self) -> int:
-        return self.app.queue.clear() if self.app else 0
+        return int(self.submit(self.app.clear_all_playback())) if self.app else 0
 
     def set_idle_video(self, path_value: str) -> str:
         path = Path(path_value).expanduser().resolve()
@@ -182,8 +210,9 @@ class BackendRuntime:
         self.overlay.set_idle_path(core.resolve_existing_media_path(path))
         config = self.config()
         config.pop("idle_video_path", None)
-        config["idle_video_paths"] = {"1": str(path)}
-        config["idle_video_path_1"] = str(path)
+        stored_path = core.media_reference(path)
+        config["idle_video_paths"] = {"1": stored_path}
+        config["idle_video_path_1"] = stored_path
         core.save_obs_config(config)
         if self.app and self.app.obs.is_connected:
             self.submit(self.app.obs.set_idle_video(path, "main"))
@@ -205,11 +234,15 @@ class BackendRuntime:
             "mock_mode": bool(app and app.mock_mode),
             "tiktok_connected": bool(app and app.is_tiktok_connected),
             "obs_connected": bool(app and app.obs.is_connected),
+            "obs_enabled": bool(app and app.enable_obs),
             "overlay_online": self.overlay.is_running,
             "overlay_url": self.overlay.url if self.overlay.is_running else "",
             "overlay_error": self.overlay_error,
             "current": current,
             "queue": [self._serialize_job(item) for item in queue_items],
+            "playback_state": "action" if current else "idle",
+            "queue_pending": len(queue_items),
+            "queue_total": len(queue_items) + (1 if current else 0),
             "progress": progress,
             "remaining": remaining,
             "uptime": max(0.0, time.monotonic() - self.started_at) if running else 0.0,
@@ -297,9 +330,9 @@ class BackendRequestHandler(BaseHTTPRequestHandler):
             elif self.path == "/api/queue/test":
                 runtime.enqueue_gift(str(body.get("gift", "")))
                 result = {"ok": True}
-            elif self.path == "/api/queue/skip":
-                runtime.skip()
-                result = {"ok": True}
+            elif self.path == "/api/queue/test-batch":
+                count = max(1, min(20, int(body.get("count", 1))))
+                result = {"enqueued": runtime.enqueue_gifts(str(body.get("gift", "")), count)}
             elif self.path == "/api/queue/clear":
                 result = {"cleared": runtime.clear_queue()}
             elif self.path == "/api/config":

@@ -21,14 +21,14 @@ export function GiftMatrix({ mappings, setMappings, post, onNotice }) {
   };
 
   const pickVideo = async (index) => {
-    const paths = await window.desktop?.pickMedia?.({ title: `Gán video cho ${mappings[index].gift}`, multiple: true });
+    const paths = await window.desktop?.pickMedia?.({ title: `Gán video cho ${mappings[index].gift}`, multiple: true, copyToLibrary: true });
     if (!paths?.length) return;
     const items = mappings.map((item, itemIndex) => itemIndex === index ? { ...item, action: paths.join(", ") } : item);
     await persist(items, `Đã gán ${paths.length} video cho ${mappings[index].gift}`);
   };
 
   const pickAudio = async (index) => {
-    const path = await window.desktop?.pickMedia?.({ title: `Gán audio cho ${mappings[index].gift}`, kind: "audio" });
+    const path = await window.desktop?.pickMedia?.({ title: `Gán audio cho ${mappings[index].gift}`, kind: "audio", copyToLibrary: true });
     if (!path) return;
     const items = mappings.map((item, itemIndex) => itemIndex === index ? { ...item, sound: path } : item);
     await persist(items, `Đã gán audio cho ${mappings[index].gift}`);

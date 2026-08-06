@@ -4,6 +4,12 @@
 
 Mở `dist/TikTokLiveStudio.exe`. Electron tự chạy `TikTokLiveBackend.exe` ẩn ở phía sau, vì vậy mọi thao tác cấu hình, test quà, queue và mở output đều nằm trong giao diện React mới. Khi cần nguồn cho TikTok Studio, bấm `Mở output` rồi chọn cửa sổ `TikTok Live Output`.
 
+### Chạy nhanh ở chế độ dev
+
+Trong thư mục `electron_output`, chạy Vite bằng `npm run dev`. Ở terminal thứ hai, đặt `ELECTRON_RENDERER_URL=http://127.0.0.1:5173` rồi chạy `npm start`. Electron tự thêm thư mục `.dev-python` vào `PYTHONPATH`; có thể đặt `PYTHON_EXECUTABLE` nếu muốn dùng một Python cụ thể.
+
+Chế độ mặc định là **TikTok Studio trực tiếp**: preview điều khiển luôn tắt âm, cửa sổ `TikTok Live Output` là nguồn hình/âm duy nhất. Chỉ bật `Đồng bộ OBS` trong phần cài đặt nếu thực sự muốn phát qua OBS; không đưa đồng thời cả OBS và cửa sổ output vào TikTok Studio vì sẽ tạo hai đường audio.
+
 ## Dedicated Electron output
 
 1. Choose an aspect ratio in `OUTPUT EXE - TIKTOK STUDIO` (`9:16` is recommended for vertical live video).
@@ -13,7 +19,7 @@ Mở `dist/TikTokLiveStudio.exe`. Electron tự chạy `TikTokLiveBackend.exe` �
 
 The available presets are `9:16`, `16:9`, `1:1`, and `4:5`. Press `F11` to toggle full screen or `Esc` to close the output window. The existing Browser Overlay remains available as a fallback.
 
-Ứng dụng điều khiển OBS Studio tự động thông qua sự kiện quà tặng TikTok Live realtime.
+Ứng dụng nhận sự kiện quà TikTok realtime và phát trực tiếp sang TikTok Studio; OBS là tích hợp tùy chọn.
 
 ## Tính năng
 - Kết nối TikTok Live & OBS WebSocket v5.

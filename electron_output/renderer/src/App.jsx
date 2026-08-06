@@ -83,6 +83,7 @@ export default function App() {
       </main>
 
       {backend.error && !backend.online ? <div className="backend-banner">Đang chờ Python backend · {backend.error}</div> : null}
+      {backend.actionError ? <div className="toast error">{backend.actionError}</div> : null}
       {notice ? <div className={`toast ${notice.type}`}>{notice.message}</div> : null}
     </div>
   );

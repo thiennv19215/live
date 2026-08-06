@@ -6,10 +6,14 @@ const EMPTY_STATUS = {
   mock_mode: false,
   tiktok_connected: false,
   obs_connected: false,
+  obs_enabled: false,
   overlay_online: false,
   overlay_url: "",
   current: null,
   queue: [],
+  playback_state: "idle",
+  queue_pending: 0,
+  queue_total: 0,
   progress: 0,
   remaining: 0,
 };
@@ -21,9 +25,14 @@ export function useBackend() {
   const [logs, setLogs] = useState([]);
   const [online, setOnline] = useState(false);
   const [error, setError] = useState("");
+  const [actionError, setActionError] = useState("");
   const lastLogId = useRef(0);
+  const statusInFlight = useRef(false);
+  const logsInFlight = useRef(false);
 
   const refreshStatus = useCallback(async () => {
+    if (statusInFlight.current) return;
+    statusInFlight.current = true;
     try {
       const next = await api.get("/api/status");
       setStatus(next);
@@ -32,10 +41,14 @@ export function useBackend() {
     } catch (nextError) {
       setOnline(false);
       setError(nextError.message);
+    } finally {
+      statusInFlight.current = false;
     }
   }, []);
 
   const refreshLogs = useCallback(async () => {
+    if (logsInFlight.current) return;
+    logsInFlight.current = true;
     try {
       const items = await api.get(`/api/logs?after=${lastLogId.current}`);
       if (items.length) {
@@ -44,6 +57,8 @@ export function useBackend() {
       }
     } catch {
       // Status polling owns the visible offline state.
+    } finally {
+      logsInFlight.current = false;
     }
   }, []);
 
@@ -57,6 +72,7 @@ export function useBackend() {
         ...nextConfig,
         mock_mode: nextConfig.mock_mode ?? true,
         enable_tiktok: nextConfig.enable_tiktok ?? false,
+        enable_obs: nextConfig.enable_obs ?? false,
       });
       setMappings(nextMappings);
     } catch (nextError) {
@@ -80,9 +96,15 @@ export function useBackend() {
   }, [online, config, mappings.length, loadInitial]);
 
   const post = useCallback(async (path, body) => {
-    const result = await api.post(path, body);
-    await refreshStatus();
-    return result;
+    try {
+      const result = await api.post(path, body);
+      setActionError("");
+      await refreshStatus();
+      return result;
+    } catch (nextError) {
+      setActionError(nextError.message);
+      throw nextError;
+    }
   }, [refreshStatus]);
 
   return {
@@ -94,6 +116,7 @@ export function useBackend() {
     logs,
     online,
     error,
+    actionError,
     post,
     reloadConfig: loadInitial,
   };

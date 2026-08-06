@@ -1,7 +1,10 @@
 import json
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -31,6 +34,11 @@ class FakeRuntime:
 
     def enqueue_gift(self, gift):
         self.gift = gift
+
+    def enqueue_gifts(self, gift, count):
+        self.gift = gift
+        self.count = count
+        return count
 
     def skip(self):
         self.skipped = True
@@ -92,10 +100,30 @@ class TestBackendApi(unittest.TestCase):
         self.assertEqual(self.post_json("/api/mappings", {"items": items}), items)
         self.assertEqual(self.runtime.saved_items, items)
 
+    def test_batch_queue_action_is_clamped(self) -> None:
+        result = self.post_json("/api/queue/test-batch", {"gift": "rose", "count": 99})
+        self.assertEqual(result["enqueued"], 20)
+        self.assertEqual((self.runtime.gift, self.runtime.count), ("rose", 20))
+
     def test_missing_route_returns_json_404(self) -> None:
         with self.assertRaises(HTTPError) as error:
             self.get_json("/missing")
         self.assertEqual(error.exception.code, 404)
+
+    def test_mapping_save_uses_portable_media_paths(self) -> None:
+        from tiktok_backend import core
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            videos = root / "videos"
+            videos.mkdir()
+            media = videos / "rose.mp4"
+            media.write_bytes(b"video")
+            config = root / "gift_config.json"
+            with patch.object(core, "VIDEO_DIRECTORY", videos), patch.object(core, "CONFIG_FILE", config):
+                core.save_gift_mapping({"rose": (str(media), 1, "", "main")})
+            saved = json.loads(config.read_text(encoding="utf-8"))
+            self.assertEqual(saved["rose"][0], "rose.mp4")
 
 
 if __name__ == "__main__":

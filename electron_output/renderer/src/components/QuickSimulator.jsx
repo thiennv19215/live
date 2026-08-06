@@ -17,9 +17,7 @@ export function QuickSimulator({ mappings, status, post, onNotice }) {
     if (!gift) return onNotice("Chưa có quà để giả lập", "error");
     if (!status.running) return onNotice("Hãy bật nguồn giả lập trước", "error");
     const repeat = Math.max(1, Math.min(20, Number(count) || 1));
-    for (let index = 0; index < repeat; index += 1) {
-      await post("/api/queue/test", { gift, sender, diamonds: Number(diamonds) || 0 });
-    }
+    await post("/api/queue/test-batch", { gift, count: repeat, sender, diamonds: Number(diamonds) || 0 });
     onNotice(`Đã kích hoạt ${gift} × ${repeat}`);
   };
 

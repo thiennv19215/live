@@ -18,7 +18,7 @@ export function StatusRail({ status, online }) {
         <div className={`status-item ${status[key] ? "is-online" : ""}`} key={key}>
           <Icon size={16} />
           <span>{label}</span>
-          <strong>{status[key] ? "ONLINE" : "STANDBY"}</strong>
+          <strong>{status.mock_mode && key === "tiktok_connected" ? "SIMULATED" : status[key] ? "ONLINE" : "STANDBY"}</strong>
         </div>
       ))}
     </div>

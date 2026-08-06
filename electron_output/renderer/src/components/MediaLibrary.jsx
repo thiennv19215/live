@@ -1,8 +1,10 @@
 import { FolderPlus, PlaySquare, Trash2, Video } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-const STORAGE_KEY = "tiktok-live-media-library";
+// Version 2 intentionally drops stale absolute paths stored by older builds.
+const STORAGE_KEY = "tiktok-live-media-library-v2";
 const fileName = (path = "") => path.split(/[\\/]/).at(-1) || path;
+const normalizedPath = (path = "") => path.replaceAll("\\", "/").toLowerCase();
 
 function loadSavedLibrary() {
   try {
@@ -26,7 +28,7 @@ export function MediaLibrary({ config, setConfig, mappings, setMappings, post, o
   }, [config?.idle_video_path, savedPaths]);
 
   const addVideos = async () => {
-    const selected = await window.desktop?.pickMedia?.({ title: "Thêm video vào thư viện", multiple: true });
+    const selected = await window.desktop?.pickMedia?.({ title: "Thêm video vào thư viện", multiple: true, copyToLibrary: true });
     if (!selected?.length) return;
     const next = [...new Set([...savedPaths, ...selected])];
     setSavedPaths(next);
@@ -63,11 +65,11 @@ export function MediaLibrary({ config, setConfig, mappings, setMappings, post, o
       <label className="library-gift-select"><span>Gán action cho quà</span><select value={gift} onChange={(event) => setGift(event.target.value)}>{(mappings || []).map((item) => <option key={item.gift}>{item.gift}</option>)}</select></label>
       <div className="media-library-list">
         {paths.length ? paths.map((path) => (
-          <article className="media-library-item" key={path}>
+          <article className={`media-library-item ${normalizedPath(path) === normalizedPath(config?.idle_video_path) ? "active" : ""}`} key={path}>
             <div className="media-file-icon"><PlaySquare size={19} /></div>
             <div className="media-file-copy"><strong title={path}>{fileName(path)}</strong><span title={path}>{path}</span></div>
             <div className="media-file-actions">
-              <button onClick={() => setIdle(path)}>Nền</button>
+              <button onClick={() => setIdle(path)}>{normalizedPath(path) === normalizedPath(config?.idle_video_path) ? "Đang làm nền" : "Nền"}</button>
               <button onClick={() => setAction(path)}>Action</button>
               {savedPaths.includes(path) ? <button className="remove" onClick={() => remove(path)} title="Bỏ khỏi thư viện"><Trash2 size={13} /></button> : null}
             </div>

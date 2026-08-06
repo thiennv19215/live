@@ -27,11 +27,31 @@
     "appId": "io.streamtoearn.tiktok-live-output",
     "productName": "TikTok Live Control Room",
     "asar": true,
-    "directories": { "output": "dist" },
-    "files": ["main.js", "preload.js", "window-options.js", "renderer/dist/**/*", "package.json"],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "window-options.js",
+      "renderer/dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/TikTokLiveBackend",
+        "to": "TikTokLiveBackend"
+      }
+    ],
     "win": {
-      "target": ["portable"],
+      "target": [
+        "portable"
+      ],
       "artifactName": "TikTokLiveStudio.exe"
     }
+  },
+  "allowScripts": {
+    "electron@43.3.0": true,
+    "esbuild@0.24.2": true
   }
 }
