@@ -37,7 +37,7 @@ OVERLAY_HTML = r"""<!doctype html>
       height: 100%;
       object-fit: var(--media-fit, cover);
       object-position: center;
-      background: #000;
+      background: transparent;
       opacity: 0;
       transform: scale(var(--media-zoom, 1));
       will-change: opacity;

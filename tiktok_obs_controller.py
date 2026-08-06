@@ -1008,7 +1008,7 @@ class ObsController:
         action_item_id = await self._get_scene_item_id(ACTION_SOURCE_NAME)
         idle_item_id = await self._get_scene_item_id(IDLE_SOURCE_NAME)
         if visible:
-            # Giữ nền trong lúc preload, rồi tắt ngay khi action đã sẵn sàng.
+            # Idle_Source được giữ chạy liên tục bên dưới Action_Source để chuyển cảnh mượt 0ms không vệt đen.
             if idle_item_id is not None:
                 await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=idle_item_id, enabled=True)
                 with contextlib.suppress(Exception):
@@ -1019,18 +1019,12 @@ class ObsController:
             if restart_media:
                 with contextlib.suppress(Exception):
                     await self._request("trigger_media_input_action", name=ACTION_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART")
-                await asyncio.sleep(0.12)
-            if idle_item_id is not None:
-                await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=idle_item_id, enabled=False)
+                await asyncio.sleep(0.05)
         else:
             if idle_item_id is not None:
-                # Bring the looping idle decoder on-screen underneath Action
-                # first. Action stays visible during the warm-up, avoiding the
-                # black/frozen gap caused by disabling it before Idle is ready.
                 await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=idle_item_id, enabled=True)
                 with contextlib.suppress(Exception):
                     await self._request("trigger_media_input_action", name=IDLE_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY")
-                await asyncio.sleep(0.12)
             if action_item_id is not None:
                 await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=action_item_id, enabled=False)
             with contextlib.suppress(Exception):
@@ -1083,6 +1077,7 @@ class ObsController:
                     "restart_on_activate": True,
                     "is_local_file": True,
                     "clear_on_media_end": False,
+                    "close_when_inactive": False,
                     "looping": is_image,
                 },
                 overlay=True,

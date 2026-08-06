@@ -596,13 +596,10 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         ]
         requested_methods = [call.args[0] for call in request.await_args_list if call.args]
 
-        self.assertIn((11, False), visibility_calls)
         self.assertIn((11, True), visibility_calls)
         self.assertIn((12, True), visibility_calls)
         self.assertIn((12, False), visibility_calls)
-        action_off_index = visibility_calls.index((12, False))
-        idle_return_index = len(visibility_calls) - 1 - visibility_calls[::-1].index((11, True))
-        self.assertLess(idle_return_index, action_off_index)
+        self.assertNotIn((11, False), visibility_calls)
         self.assertIn("set_scene_item_index", requested_methods)
         self.assertNotIn("set_scene_item_transform", requested_methods)
         self.assertNotIn("trigger_studio_mode_transition", requested_methods)
@@ -965,8 +962,7 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
             await obs._set_action_visible(True, "char1")
 
         self.assertGreaterEqual(calls.count((2, True)), 2)
-        self.assertGreaterEqual(calls.count((1, False)), 2)
-        self.assertEqual(physical_state, {1: False, 2: True})
+        self.assertEqual(physical_state, {1: True, 2: True})
 
     async def test_wait_for_action_end_ignores_stale_stopped_until_playback_started(self) -> None:
         obs = core.ObsController(mock_mode=False)
