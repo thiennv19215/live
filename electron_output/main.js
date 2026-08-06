@@ -151,16 +151,20 @@ function registerControllerIpc() {
     return { open: false };
   });
   ipcMain.handle("output:status", () => ({ open: Boolean(outputWindow && !outputWindow.isDestroyed()) }));
-  ipcMain.handle("dialog:pick-media", async () => {
+  ipcMain.handle("dialog:pick-media", async (_event, options = {}) => {
+    const multiple = Boolean(options.multiple);
     const result = await dialog.showOpenDialog(controllerWindow, {
-      title: "Chọn video nền",
-      properties: ["openFile"],
+      title: options.title || "Chọn video",
+      properties: multiple ? ["openFile", "multiSelections"] : ["openFile"],
       filters: [
-        { name: "Media", extensions: ["mp4", "mov", "mkv", "webm", "png", "jpg", "jpeg", "webp"] },
+        options.kind === "audio"
+          ? { name: "Audio", extensions: ["mp3", "wav", "m4a", "aac", "ogg", "flac"] }
+          : { name: "Video / image", extensions: ["mp4", "mov", "mkv", "webm", "png", "jpg", "jpeg", "webp"] },
         { name: "All files", extensions: ["*"] },
       ],
     });
-    return result.canceled ? "" : result.filePaths[0];
+    if (result.canceled) return multiple ? [] : "";
+    return multiple ? result.filePaths : result.filePaths[0];
   });
   ipcMain.handle("shell:open-videos", () => shell.openPath(videosDirectory()));
   ipcMain.on("window:minimize", () => controllerWindow?.minimize());

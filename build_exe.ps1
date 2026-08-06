@@ -39,22 +39,8 @@ if (Test-Path ".\videos") {
     $dataArgs = @("--add-data", "videos;videos")
 }
 
-Write-Host "Building TikTokObsControl.exe..." -ForegroundColor Cyan
-python -m PyInstaller `
-    --noconfirm `
-    --clean `
-    --windowed `
-    --onefile `
-    --name TikTokObsControl `
-    --collect-all TikTokLive `
-    --collect-all obsws_python `
-    @dataArgs `
-    .\tiktok_obs_gui.py
-if ($LASTEXITCODE -ne 0) { throw "TikTokObsControl build failed" }
-
 New-Item -ItemType Directory -Force -Path ".\dist\videos" | Out-Null
 Copy-Item ".\electron_output\dist\TikTokLiveStudio.exe" ".\dist\TikTokLiveStudio.exe" -Force
-# The same dual-mode binary remains compatible with the Tkinter fallback launcher.
 Copy-Item ".\electron_output\dist\TikTokLiveStudio.exe" ".\dist\TikTokLiveOutput.exe" -Force
 Write-Host "Copying videos folder..." -ForegroundColor Cyan
 if (Test-Path ".\videos") {
@@ -63,7 +49,6 @@ if (Test-Path ".\videos") {
     Write-Host "No videos folder found. Create dist\videos and copy your MP4 files there." -ForegroundColor Yellow
 }
 
-Write-Host "Done: $((Resolve-Path '.\dist\TikTokObsControl.exe').Path)" -ForegroundColor Green
 Write-Host "Done: $((Resolve-Path '.\dist\TikTokLiveBackend.exe').Path)" -ForegroundColor Green
 Write-Host "Done: $((Resolve-Path '.\dist\TikTokLiveStudio.exe').Path)" -ForegroundColor Green
 Write-Host "Done: $((Resolve-Path '.\dist\TikTokLiveOutput.exe').Path)" -ForegroundColor Green

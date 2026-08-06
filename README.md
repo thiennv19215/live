@@ -4,8 +4,6 @@
 
 Mở `dist/TikTokLiveStudio.exe`. Electron tự chạy `TikTokLiveBackend.exe` ẩn ở phía sau, vì vậy mọi thao tác cấu hình, test quà, queue và mở output đều nằm trong giao diện React mới. Khi cần nguồn cho TikTok Studio, bấm `Mở output` rồi chọn cửa sổ `TikTok Live Output`.
 
-`TikTokObsControl.exe` (Tkinter) vẫn được giữ làm bản dự phòng trong giai đoạn chuyển đổi.
-
 ## Dedicated Electron output
 
 1. Choose an aspect ratio in `OUTPUT EXE - TIKTOK STUDIO` (`9:16` is recommended for vertical live video).
@@ -25,8 +23,8 @@ The available presets are `9:16`, `16:9`, `1:1`, and `4:5`. Press `F11` to toggl
 - Hỗ trợ Chế độ Giả lập (Mock Mode) để thử nghiệm offline không cần OBS/TikTok.
 
 ## Hướng dẫn sử dụng
-1. Cài đặt thư viện: `pip install -r requirements.txt`
-2. Chạy ứng dụng giao diện: `python tiktok_obs_gui.py`
+1. Mở `dist/TikTokLiveStudio.exe`.
+2. Ứng dụng Electron sẽ tự khởi động Python backend ở chế độ ẩn.
 
 ## Xuất hình trực tiếp sang TikTok Live Studio
 

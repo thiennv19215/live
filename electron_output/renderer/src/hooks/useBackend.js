@@ -53,7 +53,11 @@ export function useBackend() {
         api.get("/api/config"),
         api.get("/api/mappings"),
       ]);
-      setConfig(nextConfig);
+      setConfig({
+        ...nextConfig,
+        mock_mode: nextConfig.mock_mode ?? true,
+        enable_tiktok: nextConfig.enable_tiktok ?? false,
+      });
       setMappings(nextMappings);
     } catch (nextError) {
       setError(nextError.message);
@@ -70,6 +74,10 @@ export function useBackend() {
     }, 800);
     return () => window.clearInterval(timer);
   }, [loadInitial, refreshLogs, refreshStatus]);
+
+  useEffect(() => {
+    if (online && (!config || mappings.length === 0)) loadInitial();
+  }, [online, config, mappings.length, loadInitial]);
 
   const post = useCallback(async (path, body) => {
     const result = await api.post(path, body);
