@@ -79,23 +79,83 @@ function loadUrlWithTimeout(window, url, timeoutMs = 8000) {
   ]).finally(() => clearTimeout(timer));
 }
 
+function outputBoundsFile() {
+  return path.join(runtimeDataDirectory(), "output_bounds.json");
+}
+
+function loadOutputBounds() {
+  try {
+    const file = outputBoundsFile();
+    if (fs.existsSync(file)) {
+      const data = JSON.parse(fs.readFileSync(file, "utf-8"));
+      if (data && typeof data.x === "number" && typeof data.y === "number" && typeof data.width === "number" && typeof data.height === "number") {
+        return data;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+function saveOutputBounds(bounds) {
+  try {
+    fs.writeFileSync(outputBoundsFile(), JSON.stringify(bounds, null, 2), "utf-8");
+  } catch {}
+}
+
 async function createOutputWindow(options, standalone = false) {
   if (!isAllowedUrl(options.url)) throw new Error("Only localhost overlay URLs are allowed");
-  if (outputWindow && !outputWindow.isDestroyed()) outputWindow.destroy();
 
-  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const size = fitToWorkArea(options.width, options.height, display.workAreaSize);
+  const title = `TikTok Live Stage Output (${options.ratio})`;
+
+  if (outputWindow && !outputWindow.isDestroyed()) {
+    outputWindow.setAspectRatio(options.width / options.height);
+    outputWindow.setTitle(title);
+    if (outputWindow.isMinimized()) outputWindow.restore();
+    outputWindow.show();
+    outputWindow.focus();
+    try {
+      await loadUrlWithTimeout(outputWindow, options.url);
+    } catch (error) {
+      log(`Output reload error: ${error.message}`);
+    }
+    return { open: true, title: outputWindow.getTitle() };
+  }
+
+  const savedBounds = loadOutputBounds();
+  let x, y, width, height;
+  if (savedBounds) {
+    const display = screen.getDisplayMatching({ x: savedBounds.x, y: savedBounds.y, width: savedBounds.width, height: savedBounds.height });
+    if (display) {
+      x = savedBounds.x;
+      y = savedBounds.y;
+      width = Math.max(240, savedBounds.width);
+      height = Math.max(240, savedBounds.height);
+    }
+  }
+
+  if (x === undefined) {
+    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const size = fitToWorkArea(options.width, options.height, display.workAreaSize);
+    width = size.width;
+    height = size.height;
+    x = display.workArea.x + Math.round((display.workArea.width - width) / 2);
+    y = display.workArea.y + Math.round((display.workArea.height - height) / 2);
+  }
+
   outputWindow = new BrowserWindow({
-    width: size.width,
-    height: size.height,
+    x,
+    y,
+    width,
+    height,
     minWidth: 240,
     minHeight: 240,
     useContentSize: true,
     frame: false,
     backgroundColor: "#000000",
-    title: `TikTok Live Output ${options.ratio}`,
+    title,
     show: false,
     autoHideMenuBar: true,
+    skipTaskbar: false,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -106,9 +166,23 @@ async function createOutputWindow(options, standalone = false) {
   outputWindow.setAspectRatio(options.width / options.height);
   outputWindow.setMenu(null);
   secureLocalNavigation(outputWindow);
+
+  let saveTimer = null;
+  const persistBounds = () => {
+    if (!outputWindow || outputWindow.isDestroyed() || outputWindow.isMinimized() || outputWindow.isFullScreen()) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      if (outputWindow && !outputWindow.isDestroyed()) {
+        saveOutputBounds(outputWindow.getBounds());
+      }
+    }, 300);
+  };
+  outputWindow.on("moved", persistBounds);
+  outputWindow.on("resize", persistBounds);
+
   outputWindow.on("page-title-updated", (event) => {
     event.preventDefault();
-    outputWindow?.setTitle(`TikTok Live Output ${options.ratio}`);
+    outputWindow?.setTitle(title);
   });
   outputWindow.webContents.on("before-input-event", (event, input) => {
     if (input.key === "Escape") outputWindow?.close();
@@ -126,6 +200,7 @@ async function createOutputWindow(options, standalone = false) {
   });
   outputWindow.once("ready-to-show", () => outputWindow?.show());
   outputWindow.on("closed", () => {
+    clearTimeout(saveTimer);
     outputWindow = null;
     if (controllerWindow && !controllerWindow.isDestroyed()) {
       controllerWindow.webContents.send("output:closed");
@@ -141,6 +216,7 @@ async function createOutputWindow(options, standalone = false) {
   }
   return { open: true, title: outputWindow.getTitle() };
 }
+
 
 function releaseDirectory() {
   return process.env.PORTABLE_EXECUTABLE_DIR || path.dirname(process.execPath);
