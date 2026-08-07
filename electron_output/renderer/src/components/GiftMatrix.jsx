@@ -258,28 +258,40 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
               <div className="action-media-section">
                 <div className="action-section-title">
                   <Video size={14} />
-                  <span>VIDEO ĐÃ GÁN ({action.videos?.length || 0})</span>
+                  <span>DANH SÁCH VIDEO ({action.videos?.length || 0})</span>
                 </div>
-                <div className="action-file-chips">
+
+                <div className="action-file-list">
                   {action.videos?.length ? (
                     action.videos.map((vid, vIdx) => (
-                      <span className="file-chip" key={vIdx} title={vid}>
-                        <span className="chip-name">{fileName(vid)}</span>
-                        <button
-                          className="chip-remove"
-                          onClick={() => removeVideoFromAction(index, vIdx)}
-                          title="Gỡ video này"
-                        >
-                          <X size={12} />
-                        </button>
-                      </span>
+                      <div className="video-item-row" key={vIdx} title={vid}>
+                        <span className="video-badge">Video {vIdx + 1}</span>
+                        <span className="video-filename">{fileName(vid)}</span>
+                        <div className="video-item-actions">
+                          <button
+                            className="video-play-btn"
+                            onClick={() => post("/api/queue/test", { gift: action.id, videoIndex: vIdx })}
+                            title={`Phát thử Video ${vIdx + 1}`}
+                          >
+                            <Play size={11} fill="currentColor" /> Phát thử
+                          </button>
+                          <button
+                            className="video-remove-btn"
+                            onClick={() => removeVideoFromAction(index, vIdx)}
+                            title={`Gỡ Video ${vIdx + 1}`}
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      </div>
                     ))
                   ) : (
-                    <span className="no-file-notice">Chưa có video nào</span>
+                    <span className="no-file-notice">Chưa gán video nào cho hành động này</span>
                   )}
                 </div>
+
                 <button className="media-picker-btn" onClick={() => pickVideo(index)}>
-                  <FolderOpen size={13} /> Gán / Thêm video...
+                  <FolderOpen size={13} /> {action.videos?.length ? "+ Gán thêm video..." : "Gán video..."}
                 </button>
               </div>
 

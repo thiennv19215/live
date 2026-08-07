@@ -35,11 +35,12 @@ class FakeRuntime:
     def stop_system(self):
         self.started = None
 
-    def enqueue_gift(self, gift, sender="Người xem", repeat_count=1, diamonds=0):
+    def enqueue_gift(self, gift, sender="Người xem", repeat_count=1, diamonds=0, video_index=None):
         self.gift = gift
         self.sender = sender
         self.repeat_count = repeat_count
         self.diamonds = diamonds
+        self.video_index = video_index
 
     def enqueue_gifts(self, gift, count, sender="Người xem", diamonds=0):
         self.gift = gift

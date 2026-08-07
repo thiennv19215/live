@@ -1358,18 +1358,24 @@ class TikTokObsApp:
         sender: str = "Người xem",
         repeat_count: int = 1,
         diamonds: int = 0,
+        video_index: int | None = None,
     ) -> None:
         """Them gift vao cuoi queue FIFO; khong ngat video dang phat."""
         import time as _time_mod
-        gift_name = gift_name.strip().lower()
-        mapping = GIFT_MAPPING.get(gift_name)
-        if mapping is None:
+        gift_key = gift_name.strip().lower()
+        mapping = GIFT_MAPPING.get(gift_key)
+        if mapping is None and gift_name in ACTION_PRESETS:
+            action_target = gift_name
+            priority = 1
+            sound_filename = ""
+        elif mapping is not None:
+            action_target = mapping[0]
+            priority = int(mapping[1])
+            sound_filename = mapping[2] if len(mapping) > 2 else ""
+        else:
             LOGGER.info("Bo qua qua tang chua map: %s", gift_name or "(khong ten)")
             return
 
-        action_target = mapping[0]
-        priority = int(mapping[1])
-        sound_filename = mapping[2] if len(mapping) > 2 else ""
         target_char = "main"
 
         video_files, resolved_sound_fn, action_name = resolve_gift_action_media(action_target, sound_filename)
@@ -1382,10 +1388,13 @@ class TikTokObsApp:
             media_candidates.append((candidate, resolve_existing_media_path(video_path)))
 
         existing_candidates = [(name, path) for name, path in media_candidates if path.is_file()]
-        if existing_candidates:
+        if video_index is not None and 0 <= video_index < len(existing_candidates):
+            filename, resolved_path = existing_candidates[video_index]
+        elif existing_candidates:
             filename, resolved_path = random.choice(existing_candidates)
         elif self.mock_mode and media_candidates:
-            filename, resolved_path = random.choice(media_candidates)
+            v_idx = video_index if (video_index is not None and 0 <= video_index < len(media_candidates)) else 0
+            filename, resolved_path = media_candidates[v_idx]
         else:
             missing_files = ", ".join(str(path) for _, path in media_candidates) or "(chưa cấu hình)"
             LOGGER.error("Không thể phát quà '%s': không tìm thấy file media: %s", gift_name, missing_files)

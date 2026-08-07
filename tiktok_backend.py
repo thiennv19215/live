@@ -249,10 +249,17 @@ class BackendRuntime:
     def submit(self, coroutine: Any) -> Any:
         return asyncio.run_coroutine_threadsafe(coroutine, self.loop).result(timeout=5)
 
-    def enqueue_gift(self, gift: str, sender: str = "Người xem", repeat_count: int = 1, diamonds: int = 0) -> None:
+    def enqueue_gift(
+        self,
+        gift: str,
+        sender: str = "Người xem",
+        repeat_count: int = 1,
+        diamonds: int = 0,
+        video_index: int | None = None,
+    ) -> None:
         if not self.app:
             raise RuntimeError("Hệ thống chưa chạy")
-        self.submit(self.app.enqueue_gift(gift, sender=sender, repeat_count=repeat_count, diamonds=diamonds))
+        self.submit(self.app.enqueue_gift(gift, sender=sender, repeat_count=repeat_count, diamonds=diamonds, video_index=video_index))
 
     def enqueue_gifts(self, gift: str, count: int, sender: str = "Người xem", diamonds: int = 0) -> int:
         if not self.app:
@@ -408,7 +415,9 @@ class BackendRequestHandler(BaseHTTPRequestHandler):
                 sender = str(body.get("sender", "")).strip() or "Người xem thử"
                 count = max(1, min(20, int(body.get("count", 1))))
                 diamonds = max(0, int(body.get("diamonds", 0)))
-                runtime.enqueue_gift(str(body.get("gift", "")), sender=sender, repeat_count=count, diamonds=diamonds)
+                v_idx = body.get("videoIndex")
+                video_index = int(v_idx) if v_idx is not None else None
+                runtime.enqueue_gift(str(body.get("gift", "")), sender=sender, repeat_count=count, diamonds=diamonds, video_index=video_index)
                 result = {"ok": True}
             elif self.path == "/api/queue/test-batch":
                 sender = str(body.get("sender", "")).strip() or "Người xem thử"
