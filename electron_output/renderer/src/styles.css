@@ -360,5 +360,24 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .gift-preset-select { background: #161226; color: #53e6aa; border: 1px solid #362e54; border-radius: 6px; padding: 5px 8px; font-size: 12px; font-weight: 700; cursor: pointer; }
 .gift-preset-select:hover { border-color: #53e6aa; }
 
+/* Enhanced Action Library UI & Priority Controls */
+.priority-select-box { display: flex; align-items: center; gap: 4px; background: rgba(255, 190, 85, 0.08); padding: 4px 8px; border-radius: 6px; border: 1px solid rgba(255, 190, 85, 0.2); }
+.priority-label { font-size: 10px; color: var(--amber); font-weight: 700; }
+.priority-select-box select { background: transparent; border: none; color: var(--amber); font-weight: 700; font-size: 11px; cursor: pointer; outline: none; }
+
+.action-details-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.06); }
+.action-media-section { display: flex; flex-direction: column; gap: 6px; background: rgba(15, 11, 24, 0.5); padding: 8px 10px; border-radius: 6px; border: 1px solid #231d36; }
+.action-section-title { display: flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 800; color: #8e83a3; letter-spacing: 0.04em; }
+.action-file-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 24px; align-items: center; }
+.file-chip { display: inline-flex; align-items: center; gap: 6px; background: rgba(83, 230, 170, 0.12); color: #53e6aa; border: 1px solid rgba(83, 230, 170, 0.3); padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; max-width: 100%; }
+.file-chip.sound-chip { background: rgba(255, 133, 208, 0.12); color: #ff85d0; border-color: rgba(255, 133, 208, 0.3); }
+.chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+.chip-remove { background: transparent; border: none; color: currentColor; opacity: 0.7; cursor: pointer; padding: 1px; display: flex; align-items: center; border-radius: 50%; }
+.chip-remove:hover { opacity: 1; background: rgba(255, 255, 255, 0.2); }
+.no-file-notice { font-size: 11px; color: #635a75; font-style: italic; }
+.media-picker-btn { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; background: #211a36; color: var(--cyan); border: 1px solid #362e54; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; transition: all 0.15s ease; margin-top: 4px; }
+.media-picker-btn:hover { background: #2d244a; border-color: var(--cyan); color: #fff; }
+
+
 
 

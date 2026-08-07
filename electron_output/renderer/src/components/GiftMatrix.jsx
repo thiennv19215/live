@@ -1,4 +1,4 @@
-import { FolderOpen, Music2, Play, Plus, Save, Trash2, Video } from "lucide-react";
+import { FolderOpen, Music2, Play, Plus, Save, Trash2, Video, X, Sparkles } from "lucide-react";
 
 const fileName = (path = "") => path.split(/[\\/]/).at(-1) || "Chưa gán";
 
@@ -82,14 +82,24 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
     const used = new Set(actions.map((item) => item.id));
     let number = actions.length + 1;
     while (used.has(`action_${number}`)) number += 1;
-    setActions((current) => [...current, { id: `action_${number}`, name: "Hành động mới", videos: [], sound: "" }]);
+    const newId = `action_${number}`;
+    setActions((current) => [...current, { id: newId, name: `Hành động ${number}`, videos: [], sound: "" }]);
   };
 
   const pickVideo = async (index) => {
     const paths = await window.desktop?.pickMedia?.({ title: `Gán video cho ${actions[index].name}`, multiple: true, copyToLibrary: true });
     if (!paths?.length) return;
-    const items = actions.map((item, itemIndex) => itemIndex === index ? { ...item, videos: paths } : item);
-    await persistActions(items, `Đã gán ${paths.length} video cho hành động`);
+    const existing = actions[index].videos || [];
+    const merged = Array.from(new Set([...existing, ...paths]));
+    const items = actions.map((item, itemIndex) => itemIndex === index ? { ...item, videos: merged } : item);
+    await persistActions(items, `Đã gán video mới cho ${actions[index].name}`);
+  };
+
+  const removeVideoFromAction = async (actionIndex, videoIndex) => {
+    const targetAction = actions[actionIndex];
+    const newVideos = (targetAction.videos || []).filter((_, vIdx) => vIdx !== videoIndex);
+    const newActions = actions.map((item, idx) => idx === actionIndex ? { ...item, videos: newVideos } : item);
+    await persistActions(newActions, "Đã gỡ video khỏi hành động");
   };
 
   const pickAudio = async (index) => {
@@ -99,13 +109,36 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
     await persistActions(items, "Đã gán audio cho hành động");
   };
 
+  const removeAudioFromAction = async (actionIndex) => {
+    const newActions = actions.map((item, idx) => idx === actionIndex ? { ...item, sound: "" } : item);
+    await persistActions(newActions, "Đã gỡ audio khỏi hành động");
+  };
+
   const removeAction = async (index) => {
-    const action = actions[index];
-    if (mappings.some((item) => (item.action_id || item.action) === action.id)) {
-      onNotice("Hành động đang được một quà sử dụng", "error");
-      return;
-    }
-    await persistActions(actions.filter((_, itemIndex) => itemIndex !== index), "Đã xóa hành động");
+    const targetAction = actions[index];
+    const newActions = actions.filter((_, itemIndex) => itemIndex !== index);
+
+    // Automatically unbind or update any gift rules using this deleted action
+    const affectedMappings = mappings.map((item) => {
+      const currentActionId = item.action_id || item.action;
+      if (currentActionId === targetAction.id) {
+        const fallback = newActions[0];
+        return {
+          ...item,
+          action: fallback?.id || "",
+          action_id: fallback?.id || "",
+          action_name: fallback?.name || "",
+        };
+      }
+      return item;
+    });
+
+    await post("/api/actions", { items: newActions });
+    const savedMappings = await post("/api/mappings", { items: affectedMappings });
+    setActions(newActions);
+    setMappings(savedMappings);
+    await reloadConfig?.();
+    onNotice(`Đã xóa hành động '${targetAction.name}'`);
   };
 
   return (
@@ -113,8 +146,8 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
       <div className="panel-heading compact">
         <div><span>TRIGGER RULES</span><h2>Quà → hành động</h2></div>
         <div className="heading-actions">
-          <button className="icon-button" onClick={addMapping} title="Thêm luật quà"><Plus size={17} /></button>
-          <button className="icon-button accent" onClick={saveMappings} title="Lưu luật"><Save size={17} /></button>
+          <button className="icon-button" onClick={addMapping} title="Thêm luật quà mới"><Plus size={17} /></button>
+          <button className="icon-button accent" onClick={saveMappings} title="Lưu các luật quà"><Save size={17} /></button>
         </div>
       </div>
 
@@ -123,6 +156,7 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
           const selectedId = item.action_id || item.action;
           const isLegacy = selectedId && !actions.some((action) => action.id === selectedId);
           const isKnownPreset = POPULAR_GIFTS.some((g) => g.id === item.gift);
+          const linkedAction = actions.find((a) => a.id === selectedId);
           return (
             <article className="gift-row" key={`${item.gift}-${index}`}>
               <div className="gift-topline assignment-topline rule-topline">
@@ -152,16 +186,45 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
                     title="Tên mã quà TikTok (viết thường)"
                   />
                 </div>
-                <select value={selectedId} onChange={(event) => chooseAction(index, event.target.value)} aria-label="Hành động">
-                  <option value="">Chọn hành động…</option>
-                  {isLegacy ? <option value={selectedId}>Cấu hình cũ · sẽ tự chuyển đổi</option> : null}
-                  {actions.map((action) => <option value={action.id} key={action.id}>{action.name}</option>)}
-                </select>
-                <button onClick={() => removeMapping(index)} title="Xóa"><Trash2 size={15} /></button>
+
+                <div className="action-select-box">
+                  <select value={selectedId} onChange={(event) => chooseAction(index, event.target.value)} aria-label="Hành động">
+                    <option value="">Chọn hành động…</option>
+                    {isLegacy ? <option value={selectedId}>Cấu hình cũ · {selectedId}</option> : null}
+                    {actions.map((action) => (
+                      <option value={action.id} key={action.id}>
+                        ⚡ {action.name} ({action.videos?.length || 0} video)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="priority-select-box" title="Độ ưu tiên hàng đợi">
+                  <small className="priority-label">Ưu tiên:</small>
+                  <select
+                    value={item.priority || 1}
+                    onChange={(e) => updateMapping(index, "priority", Number(e.target.value))}
+                  >
+                    <option value={1}>P1 - Bình thường</option>
+                    <option value={2}>P2 - Trung bình</option>
+                    <option value={3}>P3 - Cao</option>
+                    <option value={4}>P4 - Rất cao</option>
+                    <option value={5}>P5 - Khẩn cấp (Quà to)</option>
+                  </select>
+                </div>
+
+                <button onClick={() => removeMapping(index)} title="Xóa luật"><Trash2 size={15} /></button>
               </div>
-              <div className="gift-detail"><span>{item.action_name || selectedId || "Chưa chọn"}</span><span>FIFO</span></div>
+
+              <div className="gift-detail">
+                <span>Hành động: <strong>{linkedAction?.name || item.action_name || selectedId || "Chưa chọn"}</strong></span>
+                <span>Video: <strong>{linkedAction?.videos?.length ? `${linkedAction.videos.length} file` : "Chưa có"}</strong></span>
+              </div>
+
               <div className="assignment-actions rule-actions">
-                <button className="test" disabled={!selectedId} onClick={() => post("/api/queue/test", { gift: item.gift })}><Play size={14} fill="currentColor" /> Phát thử</button>
+                <button className="test" disabled={!selectedId} onClick={() => post("/api/queue/test", { gift: item.gift })}>
+                  <Play size={14} fill="currentColor" /> Phát thử
+                </button>
               </div>
             </article>
           );
@@ -171,26 +234,81 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
       <div className="panel-heading compact action-library-heading">
         <div><span>ACTION LIBRARY</span><h2>Kho hành động dùng chung</h2></div>
         <div className="heading-actions">
-          <button className="icon-button" onClick={addAction} title="Thêm hành động"><Plus size={17} /></button>
-          <button className="icon-button accent" onClick={saveActions} title="Lưu hành động"><Save size={17} /></button>
+          <button className="icon-button" onClick={addAction} title="Thêm hành động mới"><Plus size={17} /></button>
+          <button className="icon-button accent" onClick={saveActions} title="Lưu kho hành động"><Save size={17} /></button>
         </div>
       </div>
 
       <div className="gift-list action-list">
         {actions.map((action, index) => (
-          <article className="gift-row action-row" key={action.id}>
+          <article className="gift-row action-row" key={action.id || index}>
             <div className="gift-topline assignment-topline action-topline">
-              <input value={action.name} onChange={(event) => updateAction(index, "name", event.target.value)} aria-label="Tên hành động" />
-              <code title="Mã ổn định dùng trong mapping">{action.id}</code>
-              <button onClick={() => removeAction(index)} title="Xóa"><Trash2 size={15} /></button>
+              <input
+                value={action.name}
+                onChange={(event) => updateAction(index, "name", event.target.value)}
+                aria-label="Tên hành động"
+                placeholder="Tên hành động..."
+              />
+              <code title="Mã ID hành động">{action.id}</code>
+              <button onClick={() => removeAction(index)} title="Xóa hành động này"><Trash2 size={15} /></button>
             </div>
-            <div className="assignment-summary">
-              <div><Video size={15} /><span><small>VIDEO</small><strong>{action.videos?.length > 1 ? `${action.videos.length} video` : fileName(action.videos?.[0])}</strong></span></div>
-              <div><Music2 size={15} /><span><small>AUDIO</small><strong>{fileName(action.sound)}</strong></span></div>
-            </div>
-            <div className="assignment-actions action-buttons">
-              <button onClick={() => pickVideo(index)}><FolderOpen size={14} /> Gán video</button>
-              <button onClick={() => pickAudio(index)}><Music2 size={14} /> Gán audio</button>
+
+            <div className="action-details-grid">
+              {/* Video List Section */}
+              <div className="action-media-section">
+                <div className="action-section-title">
+                  <Video size={14} />
+                  <span>VIDEO ĐÃ GÁN ({action.videos?.length || 0})</span>
+                </div>
+                <div className="action-file-chips">
+                  {action.videos?.length ? (
+                    action.videos.map((vid, vIdx) => (
+                      <span className="file-chip" key={vIdx} title={vid}>
+                        <span className="chip-name">{fileName(vid)}</span>
+                        <button
+                          className="chip-remove"
+                          onClick={() => removeVideoFromAction(index, vIdx)}
+                          title="Gỡ video này"
+                        >
+                          <X size={12} />
+                        </button>
+                      </span>
+                    ))
+                  ) : (
+                    <span className="no-file-notice">Chưa có video nào</span>
+                  )}
+                </div>
+                <button className="media-picker-btn" onClick={() => pickVideo(index)}>
+                  <FolderOpen size={13} /> Gán / Thêm video...
+                </button>
+              </div>
+
+              {/* Audio Section */}
+              <div className="action-media-section">
+                <div className="action-section-title">
+                  <Music2 size={14} />
+                  <span>ÂM THANH (AUDIO)</span>
+                </div>
+                <div className="action-file-chips">
+                  {action.sound ? (
+                    <span className="file-chip sound-chip" title={action.sound}>
+                      <span className="chip-name">{fileName(action.sound)}</span>
+                      <button
+                        className="chip-remove"
+                        onClick={() => removeAudioFromAction(index)}
+                        title="Gỡ audio"
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ) : (
+                    <span className="no-file-notice">Mặc định theo video</span>
+                  )}
+                </div>
+                <button className="media-picker-btn" onClick={() => pickAudio(index)}>
+                  <Music2 size={13} /> {action.sound ? "Thay đổi audio..." : "Gán audio..."}
+                </button>
+              </div>
             </div>
           </article>
         ))}
@@ -198,3 +316,4 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
     </section>
   );
 }
+
