@@ -19,6 +19,33 @@ const GIFT_LABELS = {
   universe: "🌌 TikTok Universe (Vũ trụ)",
 };
 
+const GIFT_ICONS = {
+  rose: "🌹",
+  tiktok: "🎵",
+  "ice cream": "🍦",
+  "finger heart": "🫰",
+  doughnut: "🍩",
+  perfume: "🧴",
+  "paper crane": "📜",
+  sunglasses: "🕶️",
+  "hand heart": "🫶",
+  cap: "🧢",
+  lion: "🦁",
+  "sports car": "🏎️",
+  spaceship: "🚀",
+  dragon: "🐲",
+  universe: "🌌",
+};
+
+const EVENT_ICONS = {
+  comment: "💬",
+  follow: "➕",
+  share: "↗️",
+  like: "❤️",
+  join: "👋",
+  subscribe: "⭐",
+};
+
 async function copyText(text) {
   try {
     if (navigator.clipboard?.writeText) {
@@ -74,13 +101,19 @@ export function QuickSimulator({ mappings, status, post, onNotice }) {
   const selected = mappings?.find((item) => (item.trigger_key || item.gift) === triggerKey);
   const selectedTrigger = activeTriggers.find((item) => item.trigger_key === triggerKey);
 
-  const trigger = async () => {
-    if (!triggerKey) return onNotice("Chưa có luật sự kiện để giả lập", "error");
-    if (!activeKeys.has(triggerKey)) return onNotice("Luật này chưa active hoặc đang thiếu video", "error");
+  const trigger = async (target = selectedTrigger) => {
+    const nextKey = target?.trigger_key || triggerKey;
+    if (!nextKey) return onNotice("Chưa có luật sự kiện để giả lập", "error");
+    setTriggerKey(nextKey);
+    if (!activeKeys.has(nextKey)) return onNotice("Luật này chưa active hoặc đang thiếu video", "error");
     if (!status.running) return onNotice("Hãy bật nguồn giả lập trước", "error");
-    await post("/api/triggers/test", { trigger_key: triggerKey, sender });
-    onNotice(`Đã kích hoạt: ${instructionLabel(selectedTrigger)}`);
+    await post("/api/triggers/test", { trigger_key: nextKey, sender });
+    onNotice(`Đã kích hoạt: ${instructionLabel(target || selectedTrigger)}`);
   };
+
+  const eventIcon = (item) => item?.event_type === "gift"
+    ? (GIFT_ICONS[item.condition] || "🎁")
+    : (EVENT_ICONS[item?.event_type] || "⚡");
 
   const copyEventGuide = async () => {
     if (!activeTriggers.length) return onNotice("Chưa có sự kiện active để hướng dẫn", "error");
@@ -99,31 +132,43 @@ export function QuickSimulator({ mappings, status, post, onNotice }) {
         <div><FlaskConical size={16} /><span>Giả lập nhanh</span></div>
         <small>{simulatedEvents ? `${activeTriggers.length} luật trong giả lập` : acceptingEvents ? `${activeTriggers.length} luật đang nhận` : `${activeTriggers.length} luật đã cấu hình`}</small>
       </div>
-      <div className={`active-gift-guide ${acceptingEvents ? "is-live" : ""}`}>
-        <div className="active-gift-guide-title">
-          <span><CheckCircle2 size={14} /> {simulatedEvents ? "SỰ KIỆN ACTIVE TRONG GIẢ LẬP" : acceptingEvents ? "SỰ KIỆN ĐANG NHẬN TRỰC TIẾP" : "SỰ KIỆN ĐÃ SẴN SÀNG"}</span>
+      <div className={`event-reactions ${acceptingEvents ? "is-live" : ""}`}>
+        <div className="event-reactions-heading">
+          <div>
+            <span>EVENT REACTIONS</span>
+            <strong>{activeTriggers.length} sự kiện</strong>
+          </div>
           <button onClick={copyEventGuide} disabled={!activeTriggers.length} title="Sao chép câu hướng dẫn người xem"><Copy size={13} /> Sao chép</button>
         </div>
-        <div className="active-gift-chips">
+        <p>Bấm vào một sự kiện để xem thử hành động</p>
+        <div className="event-reaction-list" role="list" aria-label="Danh sách sự kiện để test">
           {activeTriggers.length ? activeTriggers.map((item) => (
-            <span className="active-gift-chip" key={item.trigger_key} title={`${item.action_name} · ${item.video_count} video`}>
-              {instructionLabel(item)} <b>{item.video_count} video</b>
-            </span>
-          )) : <em>Chưa có luật sự kiện nào đủ video để kích hoạt.</em>}
+            <button
+              type="button"
+              role="listitem"
+              className={`event-reaction-row event-${item.event_type} ${triggerKey === item.trigger_key ? "selected" : ""}`}
+              key={item.trigger_key}
+              onClick={() => trigger(item)}
+              title={`Test ${instructionLabel(item)} → ${item.action_name}`}
+            >
+              <span className="event-reaction-icon" aria-hidden="true">{eventIcon(item)}</span>
+              <span className="event-reaction-copy">
+                <strong>{instructionLabel(item)}</strong>
+                <small>{item.action_name}</small>
+              </span>
+              <span className="event-reaction-meta">
+                <b>{item.video_count}</b>
+                <small>video</small>
+                <Play size={13} fill="currentColor" />
+              </span>
+            </button>
+          )) : <div className="event-reactions-empty">Chưa có luật sự kiện nào đủ video để kích hoạt.</div>}
         </div>
-        {!acceptingEvents && activeTriggers.length ? <p>Bật kết nối TikTok để bắt đầu nhận các sự kiện này.</p> : null}
+        <div className="event-reactions-status">
+          <CheckCircle2 size={13} />
+          {simulatedEvents ? "Đang chạy chế độ giả lập" : acceptingEvents ? "Đang nhận sự kiện trực tiếp" : "Sẵn sàng — hãy bật TikTok hoặc giả lập"}
+        </div>
       </div>
-      <label className="field">
-        <span>Luật sự kiện / hành động</span>
-        <select value={triggerKey} onChange={(event) => setTriggerKey(event.target.value)}>
-          {!activeTriggers.length ? <option value="">Chưa có sự kiện active</option> : null}
-          {activeTriggers.map((item) => (
-            <option key={item.trigger_key} value={item.trigger_key}>
-              {instructionLabel(item)} → {item.action_name}
-            </option>
-          ))}
-        </select>
-      </label>
       <label className="field">
         <span>Tên người xem</span>
         <input value={sender} onChange={(event) => setSender(event.target.value)} />
@@ -134,7 +179,7 @@ export function QuickSimulator({ mappings, status, post, onNotice }) {
         <span title={selected?.sound}>{selected?.sound ? "Có audio" : "Không audio"}</span>
         <span>P{selected?.priority || 1}</span>
       </div>
-      <button className="simulate-button" disabled={!triggerKey} onClick={trigger}><Play size={15} fill="currentColor" /> Phát thử sự kiện trong preview</button>
+      <button className="simulate-button" disabled={!triggerKey} onClick={() => trigger()}><Play size={15} fill="currentColor" /> Phát lại sự kiện đã chọn</button>
     </section>
   );
 }
