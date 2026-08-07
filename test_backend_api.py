@@ -49,6 +49,11 @@ class FakeRuntime:
         self.diamonds = diamonds
         return count
 
+    def enqueue_trigger(self, trigger_key, sender="Người xem thử"):
+        self.trigger_key = trigger_key
+        self.sender = sender
+        return True
+
     def skip(self):
         self.skipped = True
 
@@ -137,6 +142,11 @@ class TestBackendApi(unittest.TestCase):
         self.assertEqual(result["enqueued"], 20)
         self.assertEqual((self.runtime.gift, self.runtime.count), ("rose", 20))
 
+    def test_arbitrary_trigger_can_be_simulated(self) -> None:
+        result = self.post_json("/api/triggers/test", {"trigger_key": "@comment:hello", "sender": "Alice"})
+        self.assertTrue(result["enqueued"])
+        self.assertEqual((self.runtime.trigger_key, self.runtime.sender), ("@comment:hello", "Alice"))
+
     def test_missing_route_returns_json_404(self) -> None:
         with self.assertRaises(HTTPError) as error:
             self.get_json("/missing")
@@ -155,8 +165,10 @@ class TestBackendApi(unittest.TestCase):
             with patch.object(core, "VIDEO_DIRECTORY", videos), patch.object(core, "CONFIG_FILE", config):
                 core.save_gift_mapping({"rose": (str(media), 1, "", "main")})
             saved = json.loads(config.read_text(encoding="utf-8"))
-            self.assertEqual(saved["version"], 2)
+            self.assertEqual(saved["version"], 3)
             self.assertEqual(saved["mappings"][0]["gift_name"], "rose")
+            self.assertEqual(saved["mappings"][0]["event_type"], "gift")
+            self.assertEqual(saved["mappings"][0]["condition"], "rose")
             self.assertEqual(saved["mappings"][0]["action_id"], "rose.mp4")
 
     def test_active_gifts_require_an_existing_video_file(self) -> None:
@@ -190,6 +202,34 @@ class TestBackendApi(unittest.TestCase):
                 self.assertFalse(missing["active"])
                 self.assertEqual(missing["readiness"], "Không tìm thấy file video")
                 self.assertEqual(runtime.status()["active_gifts"], [])
+
+    def test_active_non_gift_trigger_is_reported_separately(self) -> None:
+        from tiktok_backend import core
+
+        with tempfile.TemporaryDirectory() as directory:
+            videos = Path(directory) / "videos"
+            videos.mkdir()
+            (videos / "hello.mp4").write_bytes(b"video")
+            preset = core.ActionPreset(id="hello_action", name="Hello", videos=["hello.mp4"], sound_filename="")
+            runtime = BackendRuntime.__new__(BackendRuntime)
+            runtime.app = None
+            runtime.app_task = None
+            runtime.started_at = 0.0
+            runtime.overlay = SimpleNamespace(is_running=False, url="")
+            runtime.overlay_error = ""
+            with (
+                patch.object(core, "VIDEO_DIRECTORY", videos),
+                patch.object(core, "ACTION_PRESETS", {"hello_action": preset}),
+                patch.object(core, "GIFT_MAPPING", {"@comment:hello": ("hello_action", 2, "", "main", 5, True)}),
+            ):
+                rule = runtime.mappings()[0]
+                status = runtime.status()
+            self.assertEqual(rule["event_type"], "comment")
+            self.assertEqual(rule["condition"], "hello")
+            self.assertEqual(rule["cooldown_seconds"], 5)
+            self.assertTrue(rule["active"])
+            self.assertEqual(status["active_triggers"][0]["trigger_key"], "@comment:hello")
+            self.assertEqual(status["active_gifts"], [])
 
     def test_legacy_direct_media_mapping_migrates_to_action_preset(self) -> None:
         from tiktok_backend import core

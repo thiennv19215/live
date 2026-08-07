@@ -15,6 +15,8 @@ const EMPTY_STATUS = {
   queue_pending: 0,
   queue_total: 0,
   active_gifts: [],
+  active_triggers: [],
+  inactive_trigger_count: 0,
   inactive_gift_count: 0,
   progress: 0,
   remaining: 0,

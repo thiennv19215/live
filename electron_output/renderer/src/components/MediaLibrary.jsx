@@ -49,8 +49,8 @@ export function MediaLibrary({ config, setConfig, mappings, setMappings, post, o
   };
 
   const setAction = async (path) => {
-    if (!gift) return onNotice("Chưa có quà để gán action", "error");
-    const items = mappings.map((item) => item.gift === gift ? { ...item, action: path } : item);
+    if (!gift) return onNotice("Chưa có luật sự kiện để gán action", "error");
+    const items = mappings.map((item) => item.gift === gift ? { ...item, action: path, action_id: "", videos: [path] } : item);
     const saved = await post("/api/mappings", { items });
     setMappings(saved);
     onNotice(`Đã gán ${fileName(path)} cho ${gift}`);
@@ -62,7 +62,7 @@ export function MediaLibrary({ config, setConfig, mappings, setMappings, post, o
         <div><Video size={18} /><div><span>MEDIA LIBRARY</span><h2>Thư viện video</h2></div></div>
         <button onClick={addVideos}><FolderPlus size={16} /> Thêm video</button>
       </div>
-      <label className="library-gift-select"><span>Gán action cho quà</span><select value={gift} onChange={(event) => setGift(event.target.value)}>{(mappings || []).map((item) => <option key={item.gift}>{item.gift}</option>)}</select></label>
+      <label className="library-gift-select"><span>Gán action cho luật sự kiện</span><select value={gift} onChange={(event) => setGift(event.target.value)}>{(mappings || []).map((item) => <option value={item.gift} key={item.gift}>{item.event_label || item.gift}</option>)}</select></label>
       <div className="media-library-list">
         {paths.length ? paths.map((path) => (
           <article className={`media-library-item ${normalizedPath(path) === normalizedPath(config?.idle_video_path) ? "active" : ""}`} key={path}>

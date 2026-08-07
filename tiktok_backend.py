@@ -72,6 +72,8 @@ class BackendRuntime:
     def _serialize_job(job: core.GiftJob) -> dict[str, Any]:
         return {
             "gift": job.gift_name,
+            "event_type": getattr(job, "event_type", "gift"),
+            "event_value": getattr(job, "event_value", ""),
             "file": job.file_path.name,
             "priority": job.priority,
             "sound": job.sound_path.name if job.sound_path else "",
@@ -122,7 +124,8 @@ class BackendRuntime:
 
     def mappings(self) -> list[dict[str, Any]]:
         result = []
-        for gift, value in core.GIFT_MAPPING.items():
+        for trigger_key, value in core.GIFT_MAPPING.items():
+            event_type, condition = core.parse_trigger_key(trigger_key)
             videos, sound, action_name = core.resolve_gift_action_media(str(value[0]), str(value[2]))
             available_videos = [
                 video for video in videos
@@ -130,7 +133,10 @@ class BackendRuntime:
             ]
             missing_videos = [video for video in videos if video and video not in available_videos]
             action_id = str(value[0]) if str(value[0]) in core.ACTION_PRESETS else ""
-            if not str(value[0]).strip():
+            enabled = core.mapping_enabled(value)
+            if not enabled:
+                readiness = "Đã tắt"
+            elif not str(value[0]).strip():
                 readiness = "Chưa chọn hành động"
             elif not videos or not any(str(video).strip() for video in videos):
                 readiness = "Hành động chưa có video"
@@ -142,7 +148,11 @@ class BackendRuntime:
                 readiness = f"Sẵn sàng {len(available_videos)} video"
             result.append(
                 {
-                    "gift": gift,
+                    "gift": trigger_key,
+                    "trigger_key": trigger_key,
+                    "event_type": event_type,
+                    "condition": condition,
+                    "event_label": core.trigger_event_label(event_type, condition),
                     "action": str(value[0]),
                     "action_id": action_id,
                     "priority": int(value[1]),
@@ -150,7 +160,9 @@ class BackendRuntime:
                     "action_name": action_name,
                     "videos": videos,
                     "resolved_sound": sound,
-                    "active": bool(available_videos),
+                    "active": bool(enabled and available_videos),
+                    "enabled": enabled,
+                    "cooldown_seconds": core.mapping_cooldown(value),
                     "available_video_count": len(available_videos),
                     "missing_videos": missing_videos,
                     "readiness": readiness,
@@ -204,15 +216,21 @@ class BackendRuntime:
         mapping: dict[str, tuple[str, int, str, str]] = {}
         migrated_presets = False
         for item in items:
-            gift = str(item.get("gift", "")).strip().lower()
+            event_type = str(item.get("event_type", "gift")).strip().lower()
+            condition = str(item.get("condition", item.get("gift", ""))).strip()
+            trigger_key = core.make_trigger_key(event_type, condition)
             action = str(item.get("action_id") or item.get("action", "")).strip()
-            if not gift or not action:
+            if not action:
                 continue
+            if trigger_key in mapping:
+                raise ValueError(f"Trùng luật sự kiện: {core.trigger_event_label(event_type, condition)}")
             if action not in core.ACTION_PRESETS:
                 # Convert a legacy direct-media assignment into a reusable
                 # action preset the next time the mapping is saved.
                 videos = [value for value in core.parse_video_filenames(item.get("videos") or action) if value]
-                action_id = self._action_id(f"gift_{gift}")
+                action_id = self._action_id(
+                    f"gift_{condition}" if event_type == "gift" else f"trigger_{event_type}_{condition}"
+                )
                 suffix = 2
                 base_id = action_id
                 while action_id in core.ACTION_PRESETS:
@@ -223,13 +241,22 @@ class BackendRuntime:
                     suffix += 1
                 core.ACTION_PRESETS[action_id] = core.ActionPreset(
                     id=action_id,
-                    name=str(item.get("action_name", "")).strip() or gift.title(),
+                    name=str(item.get("action_name", "")).strip() or core.trigger_event_label(event_type, condition),
                     videos=videos,
                     sound_filename=str(item.get("sound", "")).strip(),
                 )
                 action = action_id
                 migrated_presets = True
-            mapping[gift] = (action, int(item.get("priority", 1)), str(item.get("sound", "")).strip(), "main")
+            cooldown = max(0.0, min(3600.0, float(item.get("cooldown_seconds", 0) or 0)))
+            enabled = bool(item.get("enabled", True))
+            mapping[trigger_key] = (
+                action,
+                int(item.get("priority", 1)),
+                str(item.get("sound", "")).strip(),
+                "main",
+                cooldown,
+                enabled,
+            )
         if migrated_presets:
             core.save_action_presets(core.ACTION_PRESETS)
         core.GIFT_MAPPING.clear()
@@ -344,6 +371,11 @@ class BackendRuntime:
 
         return int(self.submit(enqueue_batch()))
 
+    def enqueue_trigger(self, trigger_key: str, sender: str = "Người xem thử") -> bool:
+        if not self.app:
+            raise RuntimeError("Hệ thống chưa chạy")
+        return bool(self.submit(self.app.enqueue_trigger(trigger_key, sender=sender)))
+
     def clear_queue(self) -> int:
         return int(self.submit(self.app.clear_all_playback())) if self.app else 0
 
@@ -373,15 +405,23 @@ class BackendRuntime:
     def status(self) -> dict[str, Any]:
         app = self.app
         configured_mappings = self.mappings()
-        active_gifts = [
+        active_triggers = [
             {
-                "gift": item["gift"],
+                "trigger_key": item["trigger_key"],
+                "event_type": item["event_type"],
+                "condition": item["condition"],
+                "event_label": item["event_label"],
                 "action_name": item["action_name"],
                 "priority": item["priority"],
                 "video_count": item["available_video_count"],
             }
             for item in configured_mappings
             if item["active"]
+        ]
+        active_gifts = [
+            {**item, "gift": item["condition"]}
+            for item in active_triggers
+            if item["event_type"] == "gift"
         ]
         running = bool(self.app_task and not self.app_task.done())
         queue_items = app.queue.get_items() if app else []
@@ -410,8 +450,10 @@ class BackendRuntime:
             "current": current,
             "queue": [self._serialize_job(item) for item in queue_items],
             "gift_history": gift_history,
+            "active_triggers": active_triggers,
             "active_gifts": active_gifts,
-            "inactive_gift_count": len(configured_mappings) - len(active_gifts),
+            "inactive_trigger_count": len(configured_mappings) - len(active_triggers),
+            "inactive_gift_count": len([item for item in configured_mappings if item["event_type"] == "gift" and not item["active"]]),
             "playback_state": "action" if current else "idle",
             "queue_pending": len(queue_items),
             "queue_total": len(queue_items) + (1 if current else 0),
@@ -514,6 +556,12 @@ class BackendRequestHandler(BaseHTTPRequestHandler):
                 count = max(1, min(20, int(body.get("count", 1))))
                 diamonds = max(0, int(body.get("diamonds", 0)))
                 result = {"enqueued": runtime.enqueue_gifts(str(body.get("gift", "")), count, sender=sender, diamonds=diamonds)}
+            elif self.path == "/api/triggers/test":
+                sender = str(body.get("sender", "")).strip() or "Người xem thử"
+                trigger_key = str(body.get("trigger_key", "")).strip().lower()
+                if not trigger_key:
+                    raise ValueError("Thiếu trigger_key")
+                result = {"enqueued": runtime.enqueue_trigger(trigger_key, sender=sender)}
             elif self.path == "/api/queue/clear":
                 result = {"cleared": runtime.clear_queue()}
             elif self.path == "/api/queue/clear-history":

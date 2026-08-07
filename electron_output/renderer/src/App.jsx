@@ -40,7 +40,7 @@ export default function App() {
           ["live", "Live", LayoutDashboard],
           ["stage", "Sân khấu", Clapperboard],
           ["actions", "Hành động", Zap],
-          ["gifts", "Quà & lệnh", Gift],
+          ["gifts", "Sự kiện & lệnh", Gift],
           ["settings", "Thiết bị & cài đặt", Settings],
         ].map(([id, label, Icon]) => (
           <button className={activeTab === id ? "active" : ""} onClick={() => setActiveTab(id)} key={id}>

@@ -32,13 +32,15 @@ Chế độ mặc định là **TikTok Studio trực tiếp**: preview điều k
 
 Các tỉ lệ hỗ trợ gồm `9:16`, `16:9`, `1:1` và `4:5`. Nhấn `F11` để bật/tắt toàn màn hình hoặc `Esc` để đóng output. Không có file `TikTokLiveOutput.exe` riêng; output là cửa sổ con do `TikTokLiveStudio.exe` quản lý.
 
-Ứng dụng nhận sự kiện quà TikTok realtime và phát trực tiếp sang TikTok Studio; OBS là tích hợp tùy chọn.
+Ứng dụng nhận sự kiện TikTok realtime và phát trực tiếp sang TikTok Studio; OBS là tích hợp tùy chọn.
+
+Trong tab `Sự kiện & lệnh`, người dùng có thể gán hành động cho quà tặng, bình luận chứa từ khóa, follow, share, lượt thích, người xem vào live và đăng ký LIVE. Mỗi luật có công tắc bật/tắt, ưu tiên hàng đợi và cooldown riêng; luật chỉ được đánh dấu `ACTIVE` khi hành động có ít nhất một file video khả dụng.
 
 ## Tính năng
 - Kết nối TikTok Live & OBS WebSocket v5.
 - Dashboard Cyber Deck đơn giản: một video nền chạy liên tục và Stream Deck để gọi hành động.
 - Browser Overlay dọc chạy nội bộ để TikTok Live Studio nhận hình trực tiếp, không cần quay màn hình hoặc OBS.
-- Hàng đợi FIFO: quà đến trước phát trước, quà đến sau xếp phía sau.
+- Hàng đợi FIFO: sự kiện đến trước phát trước, sự kiện đến sau xếp phía sau.
 - Hỗ trợ Chế độ Giả lập (Mock Mode) để thử nghiệm offline không cần OBS/TikTok.
 
 ## Hướng dẫn sử dụng

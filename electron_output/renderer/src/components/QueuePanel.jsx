@@ -1,4 +1,4 @@
-import { ListRestart, Trash2, User, Gift, Gem, PlayCircle, Clock, History, CheckCircle2 } from "lucide-react";
+import { ListRestart, Trash2, User, Zap, Gem, PlayCircle, Clock, History, CheckCircle2 } from "lucide-react";
 import { useState } from "react";
 
 export function QueuePanel({ status, post }) {
@@ -26,7 +26,7 @@ export function QueuePanel({ status, post }) {
             onClick={() => setViewMode("history")}
           >
             <History size={15} />
-            <strong>Log tặng quà</strong>
+            <strong>Lịch sử sự kiện</strong>
             <span className="queue-count-badge history-badge">{historyItems.length}</span>
           </button>
         </div>
@@ -43,7 +43,7 @@ export function QueuePanel({ status, post }) {
             <button
               className="icon-button"
               onClick={() => post("/api/queue/clear-history")}
-              title="Xóa nhật ký quà tặng"
+              title="Xóa lịch sử sự kiện"
             >
               <Trash2 size={15} />
             </button>
@@ -57,7 +57,7 @@ export function QueuePanel({ status, post }) {
             items.map((item, index) => {
               const isActive = index === 0 && status.current;
               const sender = item.sender || "Người xem";
-              const giftName = item.gift || "Quà tặng";
+              const giftName = item.gift || "Sự kiện TikTok";
               const count = item.count || 1;
               const diamonds = item.diamonds || 0;
               return (
@@ -65,11 +65,11 @@ export function QueuePanel({ status, post }) {
                   <span className="queue-index">{String(index + 1).padStart(2, "0")}</span>
                   <div className="queue-row-content">
                     <div className="queue-row-header">
-                      <span className="queue-sender" title="Người tặng">
+                      <span className="queue-sender" title="Người xem">
                         <User size={13} /> <strong>{sender}</strong>
                       </span>
                       <span className="queue-gift-name">
-                        <Gift size={13} /> {giftName} {count > 1 ? <b className="gift-count">x{count}</b> : null}
+                        <Zap size={13} /> {giftName} {count > 1 ? <b className="gift-count">x{count}</b> : null}
                       </span>
                       {diamonds > 0 && (
                         <span className="queue-diamonds" title="Diamond">
@@ -98,7 +98,7 @@ export function QueuePanel({ status, post }) {
               <p>Queue đang trống</p>
               {historyItems.length > 0 && (
                 <button className="switch-history-btn" onClick={() => setViewMode("history")}>
-                  <History size={13} /> Xem {historyItems.length} log tặng quà vừa nhận
+                  <History size={13} /> Xem {historyItems.length} sự kiện vừa nhận
                 </button>
               )}
             </div>
@@ -109,7 +109,7 @@ export function QueuePanel({ status, post }) {
           {historyItems.length ? (
             historyItems.map((item, index) => {
               const sender = item.sender || "Người xem";
-              const giftName = item.gift || "Quà tặng";
+              const giftName = item.gift || "Sự kiện TikTok";
               const count = item.count || 1;
               const diamonds = item.diamonds || 0;
               const isCurrent = status.current && status.current.gift === item.gift && status.current.sender === item.sender;
@@ -122,7 +122,7 @@ export function QueuePanel({ status, post }) {
                         <User size={13} /> <strong>{sender}</strong>
                       </span>
                       <span className="queue-gift-name">
-                        <Gift size={13} /> {giftName} {count > 1 ? <b className="gift-count">x{count}</b> : null}
+                        <Zap size={13} /> {giftName} {count > 1 ? <b className="gift-count">x{count}</b> : null}
                       </span>
                       {diamonds > 0 && (
                         <span className="queue-diamonds">
@@ -146,7 +146,7 @@ export function QueuePanel({ status, post }) {
               );
             })
           ) : (
-            <div className="empty-queue">Chưa có lịch sử quà tặng nào</div>
+            <div className="empty-queue">Chưa có lịch sử sự kiện nào</div>
           )}
         </div>
       )}

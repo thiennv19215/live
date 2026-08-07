@@ -34,7 +34,17 @@ from pathlib import Path
 from typing import Any
 
 from TikTokLive import TikTokLiveClient
-from TikTokLive.events import ConnectEvent, DisconnectEvent, GiftEvent
+from TikTokLive.events import (
+    CommentEvent,
+    ConnectEvent,
+    DisconnectEvent,
+    FollowEvent,
+    GiftEvent,
+    JoinEvent,
+    LikeEvent,
+    ShareEvent,
+    SubNotifyEvent,
+)
 from obsws_python import ReqClient
 from obsws_python.error import OBSSDKTimeoutError
 from websocket import WebSocketConnectionClosedException, WebSocketTimeoutException
@@ -317,6 +327,81 @@ DEFAULT_GIFT_MAPPING: dict[str, tuple[str, int, str, str]] = {
     "lion": ("action_lion_transform", 5, "", "main"),
 }
 
+SUPPORTED_TRIGGER_EVENTS = {"gift", "comment", "follow", "share", "like", "join", "subscribe"}
+TRIGGER_EVENT_LABELS = {
+    "gift": "Quà tặng",
+    "comment": "Bình luận",
+    "follow": "Theo dõi",
+    "share": "Chia sẻ live",
+    "like": "Lượt thích",
+    "join": "Vào phòng live",
+    "subscribe": "Đăng ký LIVE",
+}
+
+
+def make_trigger_key(event_type: str, condition: str = "") -> str:
+    event_name = str(event_type or "gift").strip().lower()
+    if event_name not in SUPPORTED_TRIGGER_EVENTS:
+        raise ValueError(f"Loại sự kiện TikTok không được hỗ trợ: {event_name}")
+    normalized = str(condition).strip().lower()
+    if event_name == "gift":
+        if not normalized:
+            raise ValueError("Quà tặng cần có tên quà")
+        return normalized
+    if event_name == "comment" and not normalized:
+        raise ValueError("Sự kiện bình luận cần có từ khóa")
+    if event_name == "like":
+        try:
+            normalized = str(max(1, int(normalized or "1")))
+        except ValueError as exc:
+            raise ValueError("Ngưỡng lượt thích phải là số") from exc
+    return f"@{event_name}:{normalized or '*'}"
+
+
+def parse_trigger_key(trigger_key: str) -> tuple[str, str]:
+    key = str(trigger_key).strip().lower()
+    if key.startswith("@") and ":" in key:
+        event_type, condition = key[1:].split(":", 1)
+        if event_type in SUPPORTED_TRIGGER_EVENTS:
+            return event_type, "" if condition == "*" else condition
+    return "gift", key
+
+
+def trigger_event_label(event_type: str, condition: str = "") -> str:
+    label = TRIGGER_EVENT_LABELS.get(event_type, event_type.title())
+    if event_type == "gift":
+        return f"Quà: {condition.title()}"
+    if event_type == "comment":
+        return f'Bình luận chứa: "{condition}"'
+    if event_type == "like":
+        return f"Ít nhất {condition or '1'} lượt thích"
+    return label
+
+
+def trigger_matches(trigger_key: str, event_type: str, value: str = "", count: int = 1) -> bool:
+    rule_type, condition = parse_trigger_key(trigger_key)
+    if rule_type != str(event_type).strip().lower():
+        return False
+    normalized_value = str(value).strip().lower()
+    if rule_type == "gift":
+        return normalized_value == condition
+    if rule_type == "comment":
+        return bool(condition) and condition in normalized_value
+    if rule_type == "like":
+        return int(count or 0) >= int(condition or "1")
+    return True
+
+
+def mapping_cooldown(mapping: tuple[Any, ...]) -> float:
+    try:
+        return max(0.0, float(mapping[4])) if len(mapping) > 4 else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def mapping_enabled(mapping: tuple[Any, ...]) -> bool:
+    return bool(mapping[5]) if len(mapping) > 5 else True
+
 
 def resolve_gift_action_media(mapping_val: str, sound_mapped_val: str = "") -> tuple[list[str], str, str]:
     """
@@ -356,26 +441,34 @@ def load_gift_mapping() -> dict[str, tuple[str, int, str, str]]:
                     entries = []
 
                 for k, v in entries:
-                    gift_key = str(k).lower().strip()
-                    if not gift_key:
+                    raw_key = str(k).lower().strip()
+                    if not raw_key:
                         continue
                     if isinstance(v, dict):
+                        event_type = str(v.get("event_type", "gift")).strip().lower()
+                        condition = str(v.get("condition", raw_key)).strip()
+                        trigger_key = make_trigger_key(event_type, condition) if event_type != "gift" else raw_key
                         raw_fn = v.get("action_id", v.get("action", ""))
                         prio = int(v.get("priority", 1))
                         sound_fn = str(v.get("sound_override", v.get("sound", "")))
                         target = str(v.get("target", "main"))
+                        cooldown = max(0.0, float(v.get("cooldown_seconds", 0) or 0))
+                        enabled = bool(v.get("enabled", True))
                     elif isinstance(v, (list, tuple)) and v:
+                        trigger_key = raw_key
                         raw_fn = v[0]
                         prio = int(v[1]) if len(v) > 1 else 1
                         sound_fn = str(v[2]) if len(v) > 2 else ""
                         target = str(v[3]) if len(v) > 3 else "main"
+                        cooldown = max(0.0, float(v[4])) if len(v) > 4 else 0.0
+                        enabled = bool(v[5]) if len(v) > 5 else True
                     else:
                         continue
                     if isinstance(raw_fn, list):
                         fn = ", ".join(str(x).strip() for x in raw_fn if str(x).strip())
                     else:
                         fn = str(raw_fn).strip()
-                    res[gift_key] = (fn, prio, sound_fn, target)
+                    res[trigger_key] = (fn, prio, sound_fn, target, cooldown, enabled)
                 return res
         except Exception:
             pass
@@ -385,9 +478,10 @@ def load_gift_mapping() -> dict[str, tuple[str, int, str, str]]:
 def save_gift_mapping(mapping: dict[str, Any]) -> None:
     items = []
     for k, v in mapping.items():
-        gift_name = str(k).lower().strip()
-        if not gift_name:
+        trigger_key = str(k).lower().strip()
+        if not trigger_key:
             continue
+        event_type, condition = parse_trigger_key(trigger_key)
         action_value = str(v[0]).strip()
         # A preset id is portable by definition. Legacy direct media mappings
         # remain portable until the backend migrates them into a preset.
@@ -396,14 +490,18 @@ def save_gift_mapping(mapping: dict[str, Any]) -> None:
         )
         items.append(
             {
-                "gift_name": gift_name,
+                "gift_name": trigger_key,
+                "event_type": event_type,
+                "condition": condition,
                 "action_id": action_id,
                 "priority": int(v[1]),
                 "sound_override": media_reference(v[2]) if len(v) > 2 and v[2] else "",
                 "target": str(v[3]) if len(v) > 3 else "main",
+                "cooldown_seconds": mapping_cooldown(v),
+                "enabled": mapping_enabled(v),
             }
         )
-    atomic_write_json(CONFIG_FILE, {"version": 2, "mappings": items})
+    atomic_write_json(CONFIG_FILE, {"version": 3, "mappings": items})
 
 
 GIFT_MAPPING = load_gift_mapping()
@@ -502,6 +600,8 @@ class GiftJob:
     repeat_count: int = 1
     diamonds: int = 0
     timestamp: str = ""
+    event_type: str = "gift"
+    event_value: str = ""
 
 
 
@@ -1346,6 +1446,7 @@ class TikTokObsApp:
         self._current_interrupt: asyncio.Event | None = None
         self._last_job_was_skipped = False
         self._action_sequence_counters: dict[str, int] = {}
+        self._trigger_last_fired: dict[str, float] = {}
         self.is_tiktok_connected: bool = False
         self.current_job: GiftJob | None = None
         self.current_job_start_time: float = 0.0
@@ -1354,6 +1455,12 @@ class TikTokObsApp:
         self.client.add_listener(ConnectEvent, self.on_connect)
         self.client.add_listener(DisconnectEvent, self.on_disconnect)
         self.client.add_listener(GiftEvent, self.on_gift)
+        self.client.add_listener(CommentEvent, self.on_comment)
+        self.client.add_listener(FollowEvent, self.on_follow)
+        self.client.add_listener(ShareEvent, self.on_share)
+        self.client.add_listener(LikeEvent, self.on_like)
+        self.client.add_listener(JoinEvent, self.on_join)
+        self.client.add_listener(SubNotifyEvent, self.on_subscribe)
 
     async def on_connect(self, _: ConnectEvent) -> None:
         self.is_tiktok_connected = True
@@ -1363,17 +1470,95 @@ class TikTokObsApp:
         self.is_tiktok_connected = False
         LOGGER.warning("TikTok Live da ngat ket noi; se thu ket noi lai")
 
+    @staticmethod
+    def _event_sender(event: Any) -> str:
+        user_obj = getattr(event, "user", None)
+        return str(
+            getattr(user_obj, "nickname", None)
+            or getattr(user_obj, "unique_id", None)
+            or "Người xem"
+        )
+
+    async def trigger_tiktok_event(
+        self,
+        event_type: str,
+        value: str = "",
+        sender: str = "Người xem",
+        count: int = 1,
+        diamonds: int = 0,
+    ) -> int:
+        """Match one TikTok event against saved rules and enqueue every match."""
+        now = self.loop_time()
+        matched = 0
+        rule_matched = False
+        for trigger_key, mapping in list(GIFT_MAPPING.items()):
+            if not mapping_enabled(mapping) or not trigger_matches(trigger_key, event_type, value, count):
+                continue
+            rule_matched = True
+            cooldown = mapping_cooldown(mapping)
+            last_fired = self._trigger_last_fired.get(trigger_key, 0.0)
+            if cooldown and now - last_fired < cooldown:
+                continue
+            self._trigger_last_fired[trigger_key] = now
+            display_name = value if event_type == "gift" else trigger_event_label(event_type, value or parse_trigger_key(trigger_key)[1])
+            await self.enqueue_gift(
+                trigger_key,
+                sender=sender,
+                repeat_count=count,
+                diamonds=diamonds,
+                display_name=display_name,
+                event_type=event_type,
+                event_value=value,
+            )
+            matched += 1
+        if rule_matched and not matched:
+            LOGGER.info("Su kien TikTok dang trong cooldown: %s (%s)", event_type, value or "*")
+        elif not matched:
+            LOGGER.info("Bo qua su kien TikTok chua map: %s (%s)", event_type, value or "*")
+        return matched
+
+    @staticmethod
+    def loop_time() -> float:
+        return asyncio.get_running_loop().time()
+
+    async def on_comment(self, event: CommentEvent) -> None:
+        await self.trigger_tiktok_event("comment", str(getattr(event, "content", "")), self._event_sender(event))
+
+    async def on_follow(self, event: FollowEvent) -> None:
+        await self.trigger_tiktok_event("follow", sender=self._event_sender(event))
+
+    async def on_share(self, event: ShareEvent) -> None:
+        await self.trigger_tiktok_event("share", sender=self._event_sender(event))
+
+    async def on_like(self, event: LikeEvent) -> None:
+        await self.trigger_tiktok_event(
+            "like",
+            sender=self._event_sender(event),
+            count=max(1, int(getattr(event, "count", 1) or 1)),
+        )
+
+    async def on_join(self, event: JoinEvent) -> None:
+        await self.trigger_tiktok_event("join", sender=self._event_sender(event))
+
+    async def on_subscribe(self, event: SubNotifyEvent) -> None:
+        await self.trigger_tiktok_event("subscribe", sender=self._event_sender(event))
+
     async def on_gift(self, event: GiftEvent) -> None:
         if not should_enqueue_gift_event(event):
             return
 
         gift_name = str(getattr(event.gift, "name", "")).strip().lower()
-        user_obj = getattr(event, "user", None)
-        sender = getattr(user_obj, "nickname", None) or getattr(user_obj, "unique_id", None) or "Người xem"
+        sender = self._event_sender(event)
         repeat_count = int(getattr(event, "repeat_count", 1) or 1)
         per_diamond = int(getattr(event.gift, "diamond_count", 0) or 0)
         diamond_count = per_diamond * repeat_count
-        await self.enqueue_gift(gift_name, sender=sender, repeat_count=repeat_count, diamonds=diamond_count)
+        await self.trigger_tiktok_event(
+            "gift",
+            gift_name,
+            sender=sender,
+            count=repeat_count,
+            diamonds=diamond_count,
+        )
 
     async def enqueue_gift(
         self,
@@ -1382,6 +1567,9 @@ class TikTokObsApp:
         repeat_count: int = 1,
         diamonds: int = 0,
         video_index: int | None = None,
+        display_name: str = "",
+        event_type: str = "gift",
+        event_value: str = "",
     ) -> None:
         """Them gift vao cuoi queue FIFO; khong ngat video dang phat."""
         import time as _time_mod
@@ -1434,9 +1622,10 @@ class TikTokObsApp:
                 LOGGER.warning("⚠️ CHÚ Ý: File âm thanh cho quà '%s' chưa tồn tại: %s", gift_name, sound_path)
 
         timestamp = _time_mod.strftime("%H:%M:%S")
-        job_id = f"{gift_name}_{_time_mod.time_ns()}"
+        event_label = display_name or gift_name
+        job_id = f"{event_type}_{_time_mod.time_ns()}"
         job = GiftJob(
-            gift_name=gift_name,
+            gift_name=event_label,
             file_path=resolved_path,
             priority=priority,
             sound_path=resolved_sound_path,
@@ -1445,11 +1634,15 @@ class TikTokObsApp:
             repeat_count=repeat_count,
             diamonds=diamonds,
             timestamp=timestamp,
+            event_type=event_type,
+            event_value=event_value,
         )
         await self.queue.put(job)
         self.gift_history.appendleft({
             "id": job_id,
-            "gift": gift_name,
+            "gift": event_label,
+            "event_type": event_type,
+            "event_value": event_value,
             "file": resolved_path.name,
             "priority": priority,
             "sound": resolved_sound_path.name if resolved_sound_path else "",
@@ -1459,8 +1652,26 @@ class TikTokObsApp:
             "timestamp": timestamp,
             "status": "queued",
         })
-        LOGGER.info("🎁 [GIFT] %s vừa tặng %dx %s (💎%d) -> Action [%s]", sender, repeat_count, gift_name.title(), diamonds, action_name)
+        LOGGER.info("⚡ [TRIGGER:%s] %s · %s x%d -> Action [%s]", event_type.upper(), sender, event_label, repeat_count, action_name)
         await self.update_queue_display()
+
+    async def enqueue_trigger(self, trigger_key: str, sender: str = "Người xem") -> bool:
+        key = str(trigger_key).strip().lower()
+        mapping = GIFT_MAPPING.get(key)
+        if mapping is None or not mapping_enabled(mapping):
+            return False
+        event_type, condition = parse_trigger_key(key)
+        display_name = condition if event_type == "gift" else trigger_event_label(event_type, condition)
+        count = int(condition or "1") if event_type == "like" else 1
+        await self.enqueue_gift(
+            key,
+            sender=sender,
+            repeat_count=count,
+            display_name=display_name,
+            event_type=event_type,
+            event_value=condition,
+        )
+        return True
 
     async def enqueue_action_preset(self, preset_id: str, target_char: str = "main") -> bool:
         preset = ACTION_PRESETS.get(preset_id)

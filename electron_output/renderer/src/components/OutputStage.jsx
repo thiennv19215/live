@@ -82,12 +82,12 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
 
   const pickAction = async () => {
     if (!selectedGift) {
-      onNotice("Hãy tạo một quà trước khi gán video hành động", "error");
+      onNotice("Hãy tạo một luật sự kiện trước khi gán video hành động", "error");
       return;
     }
     const paths = await window.desktop?.pickMedia?.({ title: `Chọn video hành động cho ${selectedGift}`, multiple: true, copyToLibrary: true });
     if (!paths?.length) return;
-    const items = mappings.map((item) => item.gift === selectedGift ? { ...item, action: paths.join(", ") } : item);
+    const items = mappings.map((item) => item.gift === selectedGift ? { ...item, action: paths.join(", "), action_id: "", videos: paths } : item);
     const saved = await post("/api/mappings", { items });
     setMappings(saved);
     onNotice(`Đã gán ${paths.length} video cho ${selectedGift}`);
@@ -95,7 +95,7 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
 
   const pickAudio = async () => {
     if (!selectedGift) {
-      onNotice("Hãy chọn quà cần gán audio", "error");
+      onNotice("Hãy chọn luật sự kiện cần gán audio", "error");
       return;
     }
     const path = await window.desktop?.pickMedia?.({ title: `Chọn audio cho ${selectedGift}`, kind: "audio", copyToLibrary: true });
@@ -233,8 +233,8 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
           <div className="stage-media-controls">
             <button onClick={pickIdle}><FolderOpen size={15} /><span><small>VIDEO NỀN</small>{config?.idle_video_path?.split(/[\\/]/).at(-1) || "Chọn video"}</span></button>
             <div className="action-media-control">
-              <select value={selectedGift} onChange={(event) => setSelectedGift(event.target.value)} aria-label="Quà cần gán video">
-                {(mappings || []).map((item) => <option value={item.gift} key={item.gift}>{item.gift}</option>)}
+              <select value={selectedGift} onChange={(event) => setSelectedGift(event.target.value)} aria-label="Luật sự kiện cần gán video">
+                {(mappings || []).map((item) => <option value={item.gift} key={item.gift}>{item.event_label || item.gift}</option>)}
               </select>
               <button onClick={pickAction}><FolderOpen size={15} /><span><small>VIDEO HÀNH ĐỘNG</small>Chọn video</span></button>
             </div>

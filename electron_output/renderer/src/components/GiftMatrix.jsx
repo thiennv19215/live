@@ -26,11 +26,52 @@ const POPULAR_GIFTS = [
   { id: "universe", name: "🌌 TikTok Universe (Vũ trụ)" },
 ];
 
+const EVENT_TYPES = [
+  { id: "gift", label: "🎁 Quà tặng", condition: "rose", hint: "Tên quà TikTok", cooldown: 0 },
+  { id: "comment", label: "💬 Bình luận chứa từ khóa", condition: "xin chào", hint: "Từ khóa cần bắt", cooldown: 5 },
+  { id: "follow", label: "➕ Theo dõi", condition: "", hint: "Bất kỳ lượt theo dõi mới", cooldown: 2 },
+  { id: "share", label: "↗ Chia sẻ live", condition: "", hint: "Bất kỳ lượt chia sẻ", cooldown: 3 },
+  { id: "like", label: "❤️ Lượt thích", condition: "10", hint: "Số like tối thiểu trong sự kiện", cooldown: 10 },
+  { id: "join", label: "👋 Vào phòng live", condition: "", hint: "Bất kỳ người xem mới vào", cooldown: 10 },
+  { id: "subscribe", label: "⭐ Đăng ký LIVE", condition: "", hint: "Bất kỳ lượt đăng ký LIVE", cooldown: 2 },
+];
+
+const eventDefinition = (eventType) => EVENT_TYPES.find((item) => item.id === eventType) || EVENT_TYPES[0];
+const eventRuleLabel = (eventType, condition) => {
+  if (eventType === "gift") return `Quà: ${condition}`;
+  if (eventType === "comment") return `Bình luận chứa: “${condition}”`;
+  if (eventType === "like") return `Ít nhất ${condition || 1} lượt thích`;
+  return eventDefinition(eventType).label.replace(/^\S+\s/, "");
+};
+
 export function GiftMatrix({ mappings, setMappings, actions, setActions, post, reloadConfig, onNotice }) {
   const updateMapping = (index, key, value) => {
     setMappings((current) => current.map((item, itemIndex) => itemIndex === index ? {
       ...item,
       [key]: value,
+      active: false,
+      readiness: "Chưa lưu thay đổi",
+    } : item));
+  };
+
+  const changeEventType = (index, eventType) => {
+    const definition = eventDefinition(eventType);
+    setMappings((current) => current.map((item, itemIndex) => itemIndex === index ? {
+      ...item,
+      event_type: eventType,
+      condition: definition.condition,
+      gift: eventType === "gift" ? definition.condition : `@${eventType}:*`,
+      cooldown_seconds: definition.cooldown,
+      active: false,
+      readiness: "Chưa lưu thay đổi",
+    } : item));
+  };
+
+  const changeCondition = (index, value) => {
+    setMappings((current) => current.map((item, itemIndex) => itemIndex === index ? {
+      ...item,
+      condition: value,
+      gift: (item.event_type || "gift") === "gift" ? value : item.gift,
       active: false,
       readiness: "Chưa lưu thay đổi",
     } : item));
@@ -56,9 +97,9 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
       const next = await post("/api/mappings", { items: mappings });
       setMappings(next);
       await reloadConfig?.();
-      onNotice("Đã lưu luật quà → hành động");
+      onNotice("Đã lưu luật sự kiện → hành động");
     } catch (err) {
-      onNotice(`Lỗi lưu luật quà: ${err.message}`, "error");
+      onNotice(`Lỗi lưu luật sự kiện: ${err.message}`, "error");
     }
   };
 
@@ -66,11 +107,15 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
     const first = actions[0];
     setMappings((current) => [...current, {
       gift: "rose",
+      event_type: "gift",
+      condition: "rose",
       action: first?.id || "",
       action_id: first?.id || "",
       action_name: first?.name || "",
       videos: first?.videos || [],
       priority: 1,
+      cooldown_seconds: 0,
+      enabled: true,
       sound: "",
       active: false,
       readiness: "Chưa lưu thay đổi",
@@ -82,9 +127,9 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
       const items = mappings.filter((_, itemIndex) => itemIndex !== index);
       const saved = await post("/api/mappings", { items });
       setMappings(saved);
-      onNotice("Đã xóa luật quà");
+      onNotice("Đã xóa luật sự kiện");
     } catch (err) {
-      onNotice(`Lỗi xóa luật quà: ${err.message}`, "error");
+      onNotice(`Lỗi xóa luật sự kiện: ${err.message}`, "error");
     }
   };
 
@@ -201,18 +246,21 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
   return (
     <section className="gift-panel">
       <div className="panel-heading compact">
-        <div><span>TRIGGER RULES</span><h2>Quà → hành động</h2></div>
+        <div><span>TRIGGER RULES</span><h2>Sự kiện TikTok → hành động</h2></div>
         <div className="heading-actions">
-          <button className="icon-button" onClick={addMapping} title="Thêm luật quà mới"><Plus size={17} /></button>
-          <button className="icon-button accent" onClick={saveMappings} title="Lưu các luật quà"><Save size={17} /></button>
+          <button className="icon-button" onClick={addMapping} title="Thêm luật sự kiện mới"><Plus size={17} /></button>
+          <button className="icon-button accent" onClick={saveMappings} title="Lưu các luật sự kiện"><Save size={17} /></button>
         </div>
       </div>
 
       <div className="gift-list mapping-list">
         {mappings.map((item, index) => {
+          const eventType = item.event_type || "gift";
+          const condition = item.condition ?? (eventType === "gift" ? item.gift : "");
+          const definition = eventDefinition(eventType);
           const selectedId = item.action_id || item.action;
           const isLegacy = selectedId && !actions.some((action) => action.id === selectedId);
-          const isKnownPreset = POPULAR_GIFTS.some((g) => g.id === item.gift);
+          const isKnownPreset = eventType === "gift" && POPULAR_GIFTS.some((g) => g.id === condition);
           const linkedAction = actions.find((a) => a.id === selectedId);
           const isReady = Boolean(item.active);
           const availableVideoCount = item.available_video_count ?? linkedAction?.available_video_count ?? linkedAction?.videos?.length ?? 0;
@@ -222,28 +270,52 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
                 <div className="gift-picker-box">
                   <select
                     className="gift-preset-select"
-                    value={isKnownPreset ? item.gift : "custom"}
-                    onChange={(e) => {
-                      if (e.target.value !== "custom") {
-                        updateMapping(index, "gift", e.target.value);
-                      }
-                    }}
-                    title="Chọn quà có sẵn"
+                    value={eventType}
+                    onChange={(event) => changeEventType(index, event.target.value)}
+                    aria-label="Loại sự kiện TikTok"
                   >
-                    <option value="" disabled>-- Chọn quà TikTok --</option>
-                    {POPULAR_GIFTS.map((g) => (
-                      <option value={g.id} key={g.id}>{g.name}</option>
+                    {EVENT_TYPES.map((event) => (
+                      <option value={event.id} key={event.id}>{event.label}</option>
                     ))}
-                    <option value="custom">✏️ Nhập quà khác...</option>
                   </select>
-                  <input
-                    className="gift-name"
-                    value={item.gift}
-                    placeholder="Mã quà..."
-                    onChange={(event) => updateMapping(index, "gift", event.target.value)}
-                    aria-label="Tên quà"
-                    title="Tên mã quà TikTok (viết thường)"
-                  />
+                  {eventType === "gift" ? (
+                    <>
+                      <select
+                        className="gift-preset-select"
+                        value={isKnownPreset ? condition : "custom"}
+                        onChange={(event) => event.target.value !== "custom" && changeCondition(index, event.target.value)}
+                        title="Chọn quà có sẵn"
+                      >
+                        <option value="" disabled>-- Chọn quà TikTok --</option>
+                        {POPULAR_GIFTS.map((gift) => <option value={gift.id} key={gift.id}>{gift.name}</option>)}
+                        <option value="custom">✏️ Nhập quà khác...</option>
+                      </select>
+                      <input
+                        className="gift-name"
+                        value={condition}
+                        placeholder="Tên quà TikTok..."
+                        onChange={(event) => changeCondition(index, event.target.value)}
+                        aria-label="Tên quà"
+                      />
+                    </>
+                  ) : eventType === "comment" ? (
+                    <input
+                      className="gift-name"
+                      value={condition}
+                      placeholder="Ví dụ: xin chào"
+                      onChange={(event) => changeCondition(index, event.target.value)}
+                      aria-label="Từ khóa bình luận"
+                    />
+                  ) : eventType === "like" ? (
+                    <input
+                      className="gift-name"
+                      type="number"
+                      min="1"
+                      value={condition || "1"}
+                      onChange={(event) => changeCondition(index, event.target.value)}
+                      aria-label="Ngưỡng lượt thích"
+                    />
+                  ) : <small className="event-condition-hint">{definition.hint}</small>}
                 </div>
 
                 <div className="action-select-box">
@@ -272,10 +344,16 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
                   </select>
                 </div>
 
+                <label className="trigger-enabled" title="Cho phép luật này nhận sự kiện">
+                  <input type="checkbox" checked={item.enabled !== false} onChange={(event) => updateMapping(index, "enabled", event.target.checked)} />
+                  Bật
+                </label>
+
                 <button onClick={() => removeMapping(index)} title="Xóa luật"><Trash2 size={15} /></button>
               </div>
 
               <div className="gift-detail">
+                <span>Sự kiện: <strong>{eventRuleLabel(eventType, condition)}</strong></span>
                 <span>Hành động: <strong>{linkedAction?.name || item.action_name || selectedId || "Chưa chọn"}</strong></span>
                 <span>Video khả dụng: <strong>{availableVideoCount ? `${availableVideoCount} file` : "Chưa có"}</strong></span>
                 <span className={`gift-readiness ${isReady ? "ready" : "not-ready"}`}>
@@ -284,7 +362,12 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
               </div>
 
               <div className="assignment-actions rule-actions">
-                <button className="test" disabled={!isReady} title={isReady ? "Phát thử quà đang active" : item.readiness} onClick={() => post("/api/queue/test", { gift: item.gift })}>
+                <label className="cooldown-field" title="Không chạy lại luật trong khoảng thời gian này">
+                  Cooldown
+                  <input type="number" min="0" max="3600" value={item.cooldown_seconds || 0} onChange={(event) => updateMapping(index, "cooldown_seconds", Number(event.target.value))} />
+                  giây
+                </label>
+                <button className="test" disabled={!isReady} title={isReady ? "Phát thử luật đang active" : item.readiness} onClick={() => post("/api/triggers/test", { trigger_key: item.trigger_key || item.gift })}>
                   <Play size={14} fill="currentColor" /> Phát thử
                 </button>
               </div>
