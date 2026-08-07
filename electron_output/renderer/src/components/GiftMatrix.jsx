@@ -1,6 +1,12 @@
-import { FolderOpen, Music2, Play, Plus, Save, Trash2, Video, X, Sparkles } from "lucide-react";
+import { FolderOpen, Music2, Play, Plus, Save, Trash2, Video, X, Sparkles, ArrowUp, ArrowDown, ListOrdered } from "lucide-react";
 
 const fileName = (path = "") => path.split(/[\\/]/).at(-1) || "Chưa gán";
+
+const naturalSort = (a, b) => {
+  const nameA = fileName(a);
+  const nameB = fileName(b);
+  return nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: "base" });
+};
 
 const POPULAR_GIFTS = [
   { id: "rose", name: "🌹 Rose (Hoa hồng)" },
@@ -39,10 +45,14 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
   };
 
   const saveMappings = async () => {
-    const next = await post("/api/mappings", { items: mappings });
-    setMappings(next);
-    await reloadConfig?.();
-    onNotice("Đã lưu luật quà → hành động");
+    try {
+      const next = await post("/api/mappings", { items: mappings });
+      setMappings(next);
+      await reloadConfig?.();
+      onNotice("Đã lưu luật quà → hành động");
+    } catch (err) {
+      onNotice(`Lỗi lưu luật quà: ${err.message}`, "error");
+    }
   };
 
   const addMapping = () => {
@@ -59,10 +69,14 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
   };
 
   const removeMapping = async (index) => {
-    const items = mappings.filter((_, itemIndex) => itemIndex !== index);
-    const saved = await post("/api/mappings", { items });
-    setMappings(saved);
-    onNotice("Đã xóa luật quà");
+    try {
+      const items = mappings.filter((_, itemIndex) => itemIndex !== index);
+      const saved = await post("/api/mappings", { items });
+      setMappings(saved);
+      onNotice("Đã xóa luật quà");
+    } catch (err) {
+      onNotice(`Lỗi xóa luật quà: ${err.message}`, "error");
+    }
   };
 
   const updateAction = (index, key, value) => {
@@ -70,10 +84,14 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
   };
 
   const persistActions = async (items, message) => {
-    const saved = await post("/api/actions", { items });
-    setActions(saved);
-    await reloadConfig?.();
-    onNotice(message);
+    try {
+      const saved = await post("/api/actions", { items });
+      setActions(saved);
+      await reloadConfig?.();
+      onNotice(message);
+    } catch (err) {
+      onNotice(`Lỗi lưu kho hành động: ${err.message}`, "error");
+    }
   };
 
   const saveActions = () => persistActions(actions, "Đã lưu kho hành động");
@@ -90,9 +108,18 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
     const paths = await window.desktop?.pickMedia?.({ title: `Gán video cho ${actions[index].name}`, multiple: true, copyToLibrary: true });
     if (!paths?.length) return;
     const existing = actions[index].videos || [];
-    const merged = Array.from(new Set([...existing, ...paths]));
+    const merged = Array.from(new Set([...existing, ...paths])).sort(naturalSort);
     const items = actions.map((item, itemIndex) => itemIndex === index ? { ...item, videos: merged } : item);
     await persistActions(items, `Đã gán video mới cho ${actions[index].name}`);
+  };
+
+  const pickFolder = async (index) => {
+    const paths = await window.desktop?.pickFolder?.({ title: `Chọn thư mục video cho ${actions[index].name}`, copyToLibrary: true });
+    if (!paths?.length) return;
+    const existing = actions[index].videos || [];
+    const merged = Array.from(new Set([...existing, ...paths])).sort(naturalSort);
+    const items = actions.map((item, itemIndex) => itemIndex === index ? { ...item, videos: merged } : item);
+    await persistActions(items, `Đã thêm ${paths.length} video từ thư mục cho ${actions[index].name}`);
   };
 
   const removeVideoFromAction = async (actionIndex, videoIndex) => {
@@ -100,6 +127,24 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
     const newVideos = (targetAction.videos || []).filter((_, vIdx) => vIdx !== videoIndex);
     const newActions = actions.map((item, idx) => idx === actionIndex ? { ...item, videos: newVideos } : item);
     await persistActions(newActions, "Đã gỡ video khỏi hành động");
+  };
+
+  const moveVideo = async (actionIndex, fromIdx, toIdx) => {
+    const targetAction = actions[actionIndex];
+    const videos = [...(targetAction.videos || [])];
+    if (toIdx < 0 || toIdx >= videos.length) return;
+    const temp = videos[fromIdx];
+    videos[fromIdx] = videos[toIdx];
+    videos[toIdx] = temp;
+    const newActions = actions.map((item, idx) => idx === actionIndex ? { ...item, videos } : item);
+    await persistActions(newActions, "Đã đổi thứ tự video");
+  };
+
+  const sortActionVideos = async (actionIndex) => {
+    const targetAction = actions[actionIndex];
+    const sorted = [...(targetAction.videos || [])].sort(naturalSort);
+    const newActions = actions.map((item, idx) => idx === actionIndex ? { ...item, videos: sorted } : item);
+    await persistActions(newActions, "Đã sắp xếp danh sách video theo 1-2-3");
   };
 
   const pickAudio = async (index) => {
@@ -133,12 +178,16 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
       return item;
     });
 
-    await post("/api/actions", { items: newActions });
-    const savedMappings = await post("/api/mappings", { items: affectedMappings });
-    setActions(newActions);
-    setMappings(savedMappings);
-    await reloadConfig?.();
-    onNotice(`Đã xóa hành động '${targetAction.name}'`);
+    try {
+      await post("/api/actions", { items: newActions });
+      const savedMappings = await post("/api/mappings", { items: affectedMappings });
+      setActions(newActions);
+      setMappings(savedMappings);
+      await reloadConfig?.();
+      onNotice(`Đã xóa hành động '${targetAction.name}'`);
+    } catch (err) {
+      onNotice(`Lỗi xóa hành động: ${err.message}`, "error");
+    }
   };
 
   return (
@@ -256,10 +305,28 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
             <div className="action-details-grid">
               {/* Video List Section */}
               <div className="action-media-section">
-                <div className="action-section-title">
-                  <Video size={14} />
-                  <span>DANH SÁCH VIDEO ({action.videos?.length || 0})</span>
+                <div className="action-section-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <Video size={14} />
+                    <span>DANH SÁCH VIDEO ({action.videos?.length || 0})</span>
+                  </div>
+                  {action.videos?.length > 1 ? (
+                    <button
+                      className="icon-button-small"
+                      onClick={() => sortActionVideos(index)}
+                      title="Tự động sắp xếp video theo thứ tự tên (1➔2➔3)"
+                      style={{ fontSize: "11px", padding: "2px 6px", display: "flex", alignItems: "center", gap: "4px" }}
+                    >
+                      <ListOrdered size={12} /> Sắp xếp 1-2-3
+                    </button>
+                  ) : null}
                 </div>
+
+                {action.videos?.length ? (
+                  <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.45)", margin: "2px 0 6px 0" }}>
+                    ℹ️ Phát lần lượt: Video 1 ➔ Video 2 ➔ Video 3...
+                  </div>
+                ) : null}
 
                 <div className="action-file-list">
                   {action.videos?.length ? (
@@ -268,6 +335,22 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
                         <span className="video-badge">Video {vIdx + 1}</span>
                         <span className="video-filename">{fileName(vid)}</span>
                         <div className="video-item-actions">
+                          <button
+                            className="video-move-btn"
+                            disabled={vIdx === 0}
+                            onClick={() => moveVideo(index, vIdx, vIdx - 1)}
+                            title="Đẩy video này lên trước"
+                          >
+                            <ArrowUp size={11} />
+                          </button>
+                          <button
+                            className="video-move-btn"
+                            disabled={vIdx === action.videos.length - 1}
+                            onClick={() => moveVideo(index, vIdx, vIdx + 1)}
+                            title="Đẩy video này xuống sau"
+                          >
+                            <ArrowDown size={11} />
+                          </button>
                           <button
                             className="video-play-btn"
                             onClick={() => post("/api/queue/test", { gift: action.id, videoIndex: vIdx })}
@@ -290,9 +373,14 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
                   )}
                 </div>
 
-                <button className="media-picker-btn" onClick={() => pickVideo(index)}>
-                  <FolderOpen size={13} /> {action.videos?.length ? "+ Gán thêm video..." : "Gán video..."}
-                </button>
+                <div className="action-picker-buttons" style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "8px" }}>
+                  <button className="media-picker-btn" onClick={() => pickVideo(index)}>
+                    <FolderOpen size={13} /> {action.videos?.length ? "+ Gán thêm video..." : "Gán video..."}
+                  </button>
+                  <button className="media-picker-btn" onClick={() => pickFolder(index)} title="Chọn toàn bộ thư mục chứa video">
+                    <FolderOpen size={13} /> + Thêm thư mục...
+                  </button>
+                </div>
               </div>
 
               {/* Audio Section */}

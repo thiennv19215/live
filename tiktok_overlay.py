@@ -351,6 +351,9 @@ class OverlayState:
         fingerprint = hashlib.sha256(identity).hexdigest()[:20]
         route = f"/{kind}/{fingerprint}{path.suffix.lower()}"
         self._assets[route] = path.resolve()
+        if len(self._assets) > 200:
+            oldest = next(iter(self._assets))
+            self._assets.pop(oldest, None)
         return route
 
     def resolve_asset(self, route: str) -> Path | None:

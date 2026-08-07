@@ -1,6 +1,6 @@
 {
   "name": "tiktok-live-output",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "description": "React and Electron control room for TikTok Live Studio",
   "author": "TikTok Live Control Room",
@@ -47,7 +47,7 @@
       "target": [
         "portable"
       ],
-      "artifactName": "TikTokLiveStudio.exe"
+      "artifactName": "TikTokLiveStudio_v1.2.0.exe"
     }
   },
   "allowScripts": {

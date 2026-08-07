@@ -25,7 +25,7 @@ export default function App() {
       <header className="titlebar">
         <div className="brand-lockup">
           <div className="brand-mark"><RadioTower size={20} /></div>
-          <div><strong>TikTok Live Control Room</strong><span>React + Electron / Python Engine</span></div>
+          <div><strong>TikTok Live Control Room</strong><span style={{ color: "#00f2fe", fontWeight: "600" }}>v1.2.0 · Audit & Thứ Tự 1-2-3</span></div>
         </div>
         <StatusRail status={backend.status} online={backend.online} />
         <div className="window-actions">

@@ -44,13 +44,17 @@ if (Test-Path ".\videos") {
 }
 
 New-Item -ItemType Directory -Force -Path ".\dist\videos" | Out-Null
+$builtExe = ".\electron_output\dist\TikTokLiveStudio_v1.2.0.exe"
+if (-not (Test-Path $builtExe)) {
+    $builtExe = ".\electron_output\dist\TikTokLiveStudio.exe"
+}
+$versionedExecutable = ".\dist\TikTokLiveStudio_v1.2.0.exe"
 $finalExecutable = ".\dist\TikTokLiveStudio.exe"
 try {
-    Copy-Item ".\electron_output\dist\TikTokLiveStudio.exe" $finalExecutable -Force
+    Copy-Item $builtExe $versionedExecutable -Force
+    Copy-Item $builtExe $finalExecutable -Force
 } catch [System.IO.IOException] {
-    $finalExecutable = ".\dist\TikTokLiveStudio-new.exe"
-    Copy-Item ".\electron_output\dist\TikTokLiveStudio.exe" $finalExecutable -Force
-    Write-Host "Existing executable is open; wrote the new build to $finalExecutable" -ForegroundColor Yellow
+    Write-Host "Existing executable is open; written versioned build to $versionedExecutable" -ForegroundColor Yellow
 }
 Remove-Item ".\dist\TikTokLiveOutput.exe" -Force -ErrorAction SilentlyContinue
 Remove-Item ".\dist\TikTokLiveBackend" -Recurse -Force -ErrorAction SilentlyContinue

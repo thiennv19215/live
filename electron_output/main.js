@@ -331,7 +331,26 @@ function registerControllerIpc() {
     });
     if (result.canceled) return multiple ? [] : "";
     const selected = options.copyToLibrary ? result.filePaths.map(importMedia) : result.filePaths;
-    return multiple ? selected : selected[0];
+    if (multiple) {
+      selected.sort((a, b) => path.basename(a).localeCompare(path.basename(b), undefined, { numeric: true, sensitivity: "base" }));
+      return selected;
+    }
+    return selected[0];
+  });
+  ipcMain.handle("dialog:pick-folder", async (_event, options = {}) => {
+    const result = await dialog.showOpenDialog(controllerWindow, {
+      title: options.title || "Chọn thư mục chứa video",
+      properties: ["openDirectory"],
+    });
+    if (result.canceled || !result.filePaths.length) return [];
+    const folderPath = result.filePaths[0];
+    const validExts = new Set([".mp4", ".mov", ".mkv", ".webm", ".png", ".jpg", ".jpeg", ".webp"]);
+    const files = fs.readdirSync(folderPath)
+      .filter((name) => validExts.has(path.extname(name).toLowerCase()))
+      .map((name) => path.join(folderPath, name))
+      .sort((a, b) => path.basename(a).localeCompare(path.basename(b), undefined, { numeric: true, sensitivity: "base" }));
+    const imported = options.copyToLibrary ? files.map(importMedia) : files;
+    return imported;
   });
   ipcMain.handle("shell:open-videos", () => shell.openPath(videosDirectory()));
   ipcMain.on("window:minimize", () => controllerWindow?.minimize());

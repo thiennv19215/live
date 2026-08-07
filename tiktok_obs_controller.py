@@ -81,7 +81,14 @@ def atomic_write_json(path: Path, data: Any) -> None:
             json.dump(data, stream, ensure_ascii=False, indent=2)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        for attempt in range(3):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if attempt == 2:
+                    raise
+                time.sleep(0.05)
     finally:
         with contextlib.suppress(FileNotFoundError):
             temporary.unlink()
@@ -1269,6 +1276,9 @@ class ObsController:
                 )
 
 
+_DURATION_CACHE: dict[tuple[str, int, int], float] = {}
+
+
 def get_video_duration(video_path: Path) -> float:
     """Lay duration bang ffprobe; neu file khong ton tai thi fallback 0.5s de khong nghien hang cho."""
     if not video_path.is_file():
@@ -1276,6 +1286,16 @@ def get_video_duration(video_path: Path) -> float:
 
     if video_path.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".webp"):
         return 3.0
+
+    cache_key = None
+    try:
+        resolved = video_path.resolve()
+        stat = resolved.stat()
+        cache_key = (str(resolved), stat.st_size, stat.st_mtime_ns)
+        if cache_key in _DURATION_CACHE:
+            return _DURATION_CACHE[cache_key]
+    except OSError:
+        pass
 
     try:
         cmd = [
@@ -1299,8 +1319,10 @@ def get_video_duration(video_path: Path) -> float:
         if os.name == "nt":
             run_options["creationflags"] = subprocess.CREATE_NO_WINDOW
         result = subprocess.run(cmd, **run_options)
-        duration = float(result.stdout.strip())
-        return max(duration, 0.1)
+        duration = max(float(result.stdout.strip()), 0.1)
+        if cache_key is not None:
+            _DURATION_CACHE[cache_key] = duration
+        return duration
     except (FileNotFoundError, ValueError, subprocess.SubprocessError, OSError):
         return ACTION_DEFAULT_DURATION
 
@@ -1323,6 +1345,7 @@ class TikTokObsApp:
         self._stop_event = asyncio.Event()
         self._current_interrupt: asyncio.Event | None = None
         self._last_job_was_skipped = False
+        self._action_sequence_counters: dict[str, int] = {}
         self.is_tiktok_connected: bool = False
         self.current_job: GiftJob | None = None
         self.current_job_start_time: float = 0.0
@@ -1391,7 +1414,9 @@ class TikTokObsApp:
         if video_index is not None and 0 <= video_index < len(existing_candidates):
             filename, resolved_path = existing_candidates[video_index]
         elif existing_candidates:
-            filename, resolved_path = random.choice(existing_candidates)
+            seq_idx = self._action_sequence_counters.get(gift_key, 0) % len(existing_candidates)
+            filename, resolved_path = existing_candidates[seq_idx]
+            self._action_sequence_counters[gift_key] = seq_idx + 1
         elif self.mock_mode and media_candidates:
             v_idx = video_index if (video_index is not None and 0 <= video_index < len(media_candidates)) else 0
             filename, resolved_path = media_candidates[v_idx]

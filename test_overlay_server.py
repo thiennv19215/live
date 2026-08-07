@@ -158,7 +158,8 @@ class TestOverlayPlaybackIntegration(unittest.IsolatedAsyncioTestCase):
         with patch.object(core, "get_video_duration", return_value=0.001):
             await app._play_job(job)
 
-        overlay.show_action.assert_called_once_with(job.file_path, sound_path=None, label="rose")
+        expected_label = f"🎁 {job.sender} đã tặng 1x {job.gift_name.title()}"
+        overlay.show_action.assert_called_once_with(job.file_path, sound_path=None, label=expected_label)
         overlay.show_idle.assert_called_once_with()
         app.obs.wait_for_action_end.assert_not_awaited()
         # Do not reconnect just to stop a source that never started. This keeps

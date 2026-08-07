@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("desktop", {
     return () => ipcRenderer.removeListener("output:closed", listener);
   },
   pickMedia: (options = {}) => ipcRenderer.invoke("dialog:pick-media", options),
+  pickFolder: (options = {}) => ipcRenderer.invoke("dialog:pick-folder", options),
   openVideosFolder: () => ipcRenderer.invoke("shell:open-videos"),
   minimize: () => ipcRenderer.send("window:minimize"),
   toggleMaximize: () => ipcRenderer.send("window:toggle-maximize"),

@@ -115,6 +115,8 @@ class BackendRuntime:
         core.IDLE_SOURCE_NAME = str(config["idle_source_name"]).strip()
         core.ACTION_SOURCE_NAME = str(config["action_source_name"]).strip()
         core.OUTPUT_RATIO = str(config.get("output_ratio", "9:16"))
+        if self.app and hasattr(self.app, "client"):
+            self.app.client._unique_id = core.TIKTOK_USERNAME
         return self.config()
 
     def mappings(self) -> list[dict[str, Any]]:
@@ -310,6 +312,12 @@ class BackendRuntime:
             elapsed = max(0.0, self.loop.time() - app.current_job_start_time)
             progress = min(1.0, elapsed / app.current_job_duration)
             remaining = max(0.0, app.current_job_duration - elapsed)
+        gift_history: list[dict[str, Any]] = []
+        if app:
+            try:
+                gift_history = list(app.gift_history)
+            except RuntimeError:
+                gift_history = []
         return {
             "running": running,
             "mock_mode": bool(app and app.mock_mode),
@@ -321,7 +329,7 @@ class BackendRuntime:
             "overlay_error": self.overlay_error,
             "current": current,
             "queue": [self._serialize_job(item) for item in queue_items],
-            "gift_history": list(app.gift_history) if app else [],
+            "gift_history": gift_history,
             "playback_state": "action" if current else "idle",
             "queue_pending": len(queue_items),
             "queue_total": len(queue_items) + (1 if current else 0),
