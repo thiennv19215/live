@@ -28,7 +28,12 @@ const POPULAR_GIFTS = [
 
 export function GiftMatrix({ mappings, setMappings, actions, setActions, post, reloadConfig, onNotice }) {
   const updateMapping = (index, key, value) => {
-    setMappings((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, [key]: value } : item));
+    setMappings((current) => current.map((item, itemIndex) => itemIndex === index ? {
+      ...item,
+      [key]: value,
+      active: false,
+      readiness: "Chưa lưu thay đổi",
+    } : item));
   };
 
   const chooseAction = (index, actionId) => {
@@ -41,6 +46,8 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
       videos: preset?.videos || [],
       resolved_sound: preset?.sound || "",
       sound: "",
+      active: false,
+      readiness: "Chưa lưu thay đổi",
     } : item));
   };
 
@@ -65,6 +72,8 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
       videos: first?.videos || [],
       priority: 1,
       sound: "",
+      active: false,
+      readiness: "Chưa lưu thay đổi",
     }]);
   };
 
@@ -179,10 +188,9 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
     });
 
     try {
-      await post("/api/actions", { items: newActions });
-      const savedMappings = await post("/api/mappings", { items: affectedMappings });
-      setActions(newActions);
-      setMappings(savedMappings);
+      const saved = await post("/api/catalog", { actions: newActions, mappings: affectedMappings });
+      setActions(saved.actions);
+      setMappings(saved.mappings);
       await reloadConfig?.();
       onNotice(`Đã xóa hành động '${targetAction.name}'`);
     } catch (err) {
@@ -206,8 +214,10 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
           const isLegacy = selectedId && !actions.some((action) => action.id === selectedId);
           const isKnownPreset = POPULAR_GIFTS.some((g) => g.id === item.gift);
           const linkedAction = actions.find((a) => a.id === selectedId);
+          const isReady = Boolean(item.active);
+          const availableVideoCount = item.available_video_count ?? linkedAction?.available_video_count ?? linkedAction?.videos?.length ?? 0;
           return (
-            <article className="gift-row" key={`${item.gift}-${index}`}>
+            <article className={`gift-row ${isReady ? "gift-ready" : "gift-not-ready"}`} key={`${item.gift}-${index}`}>
               <div className="gift-topline assignment-topline rule-topline">
                 <div className="gift-picker-box">
                   <select
@@ -267,11 +277,14 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
 
               <div className="gift-detail">
                 <span>Hành động: <strong>{linkedAction?.name || item.action_name || selectedId || "Chưa chọn"}</strong></span>
-                <span>Video: <strong>{linkedAction?.videos?.length ? `${linkedAction.videos.length} file` : "Chưa có"}</strong></span>
+                <span>Video khả dụng: <strong>{availableVideoCount ? `${availableVideoCount} file` : "Chưa có"}</strong></span>
+                <span className={`gift-readiness ${isReady ? "ready" : "not-ready"}`}>
+                  {isReady ? "● ACTIVE" : `⚠ ${item.readiness || "Chưa sẵn sàng"}`}
+                </span>
               </div>
 
               <div className="assignment-actions rule-actions">
-                <button className="test" disabled={!selectedId} onClick={() => post("/api/queue/test", { gift: item.gift })}>
+                <button className="test" disabled={!isReady} title={isReady ? "Phát thử quà đang active" : item.readiness} onClick={() => post("/api/queue/test", { gift: item.gift })}>
                   <Play size={14} fill="currentColor" /> Phát thử
                 </button>
               </div>
@@ -416,4 +429,3 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
     </section>
   );
 }
-

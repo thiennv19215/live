@@ -971,7 +971,7 @@ class ObsController:
             action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART",
         )
 
-        deadline = asyncio.get_running_loop().time() + 0.4
+        deadline = asyncio.get_running_loop().time() + 1.5
         while asyncio.get_running_loop().time() < deadline:
             try:
                 status = await self._request("get_media_input_status", name=ACTION_SOURCE_NAME)
@@ -986,7 +986,7 @@ class ObsController:
                 break
             await asyncio.sleep(0.08)
 
-        LOGGER.info("[OBS] Preload san sang; chot hien thi action")
+        LOGGER.warning("[OBS] Preload chua san sang sau 1.5s; hien thi action bang co che fallback")
         return False
 
     async def _set_action_visible(

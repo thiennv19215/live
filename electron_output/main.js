@@ -4,6 +4,7 @@ const http = require("node:http");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 const { app, BrowserWindow, dialog, ipcMain, screen, shell } = require("electron");
+const { childHasExited, stopChildProcess } = require("./backend-process");
 const { fitToWorkArea, parseOptions } = require("./window-options");
 
 const logPath = path.join(process.env.TEMP || process.cwd(), "tiktok-live-control-room.log");
@@ -19,6 +20,8 @@ let outputWindow = null;
 let backendProcess = null;
 let controlServer = null;
 let quitting = false;
+let shutdownStarted = false;
+let shutdownComplete = false;
 
 function log(message) {
   fs.appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
@@ -352,9 +355,92 @@ function startBackend() {
 }
 
 function requestBackendShutdown() {
-  const request = http.request(`${backendUrl}/api/shutdown`, { method: "POST", timeout: 700 }, (response) => response.resume());
-  request.on("error", () => {});
-  request.end("{}");
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (accepted) => {
+      if (settled) return;
+      settled = true;
+      resolve(accepted);
+    };
+    const request = http.request(`${backendUrl}/api/shutdown`, { method: "POST" }, (response) => {
+      response.resume();
+      response.once("end", () => finish(response.statusCode === 200));
+      response.once("error", () => finish(false));
+    });
+    request.setTimeout(700, () => {
+      request.destroy();
+      finish(false);
+    });
+    request.once("error", () => finish(false));
+    request.end("{}");
+  });
+}
+
+function closeControlServer() {
+  const server = controlServer;
+  controlServer = null;
+  if (!server) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, 1000);
+    try {
+      server.close(finish);
+    } catch {
+      finish();
+    }
+  });
+}
+
+function forceKillBackendProcess(child) {
+  if (childHasExited(child)) return Promise.resolve();
+  if (process.platform !== "win32") {
+    child.kill("SIGKILL");
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error = null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+    const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    const timer = setTimeout(() => {
+      killer.kill();
+      try {
+        child.kill("SIGKILL");
+      } catch {}
+      finish();
+    }, 2000);
+    killer.once("error", finish);
+    killer.once("exit", (code) => {
+      if (code === 0 || childHasExited(child)) finish();
+      else finish(new Error(`taskkill exited with code ${code}`));
+    });
+  });
+}
+
+async function stopOwnedServices() {
+  await closeControlServer();
+  if (isOutputOnly || childHasExited(backendProcess)) return;
+  const result = await stopChildProcess(backendProcess, {
+    requestShutdown: requestBackendShutdown,
+    forceKill: forceKillBackendProcess,
+  });
+  if (result.forced) log(`backend graceful shutdown timed out; force kill exited=${result.exited}`);
+  if (result.forceError) log(`backend force kill error: ${result.forceError.stack || result.forceError}`);
+  if (!result.exited) log("backend did not confirm exit after force kill");
 }
 
 function registerControllerIpc() {
@@ -488,13 +574,18 @@ app.whenReady().then(async () => {
   app.quit();
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
   quitting = true;
-  if (controlServer) controlServer.close();
-  if (!isOutputOnly) requestBackendShutdown();
-  if (backendProcess && !backendProcess.killed) {
-    setTimeout(() => backendProcess?.kill(), 900).unref();
-  }
+  if (shutdownComplete) return;
+  event.preventDefault();
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  stopOwnedServices()
+    .catch((error) => log(`shutdown error: ${error.stack || error}`))
+    .finally(() => {
+      shutdownComplete = true;
+      app.quit();
+    });
 });
 
 app.on("window-all-closed", () => app.quit());

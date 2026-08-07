@@ -66,6 +66,11 @@ class FakeRuntime:
         self.saved_actions = items
         return items
 
+    def save_catalog(self, actions, mappings):
+        self.saved_actions = actions
+        self.saved_items = mappings
+        return {"actions": actions, "mappings": mappings}
+
     def set_idle_video(self, path):
         return path
 
@@ -119,6 +124,14 @@ class TestBackendApi(unittest.TestCase):
         self.assertEqual(self.post_json("/api/actions", {"items": items}), items)
         self.assertEqual(self.runtime.saved_actions, items)
 
+    def test_catalog_save_updates_actions_and_mappings_together(self) -> None:
+        actions = [{"id": "action_lion", "name": "Lion", "videos": ["lion.mp4"], "sound": ""}]
+        mappings = [{"gift": "lion", "action": "action_lion", "priority": 5}]
+        result = self.post_json("/api/catalog", {"actions": actions, "mappings": mappings})
+        self.assertEqual(result, {"actions": actions, "mappings": mappings})
+        self.assertEqual(self.runtime.saved_actions, actions)
+        self.assertEqual(self.runtime.saved_items, mappings)
+
     def test_batch_queue_action_is_clamped(self) -> None:
         result = self.post_json("/api/queue/test-batch", {"gift": "rose", "count": 99})
         self.assertEqual(result["enqueued"], 20)
@@ -146,6 +159,38 @@ class TestBackendApi(unittest.TestCase):
             self.assertEqual(saved["mappings"][0]["gift_name"], "rose")
             self.assertEqual(saved["mappings"][0]["action_id"], "rose.mp4")
 
+    def test_active_gifts_require_an_existing_video_file(self) -> None:
+        from tiktok_backend import core
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            videos = root / "videos"
+            videos.mkdir()
+            media = videos / "rose.mp4"
+            media.write_bytes(b"video")
+            preset = core.ActionPreset(id="rose_action", name="Rose", videos=["rose.mp4"], sound_filename="")
+            runtime = BackendRuntime.__new__(BackendRuntime)
+            runtime.app = None
+            runtime.app_task = None
+            runtime.started_at = 0.0
+            runtime.overlay = SimpleNamespace(is_running=False, url="")
+            runtime.overlay_error = ""
+            with (
+                patch.object(core, "VIDEO_DIRECTORY", videos),
+                patch.object(core, "ACTION_PRESETS", {"rose_action": preset}),
+                patch.object(core, "GIFT_MAPPING", {"rose": ("rose_action", 1, "", "main")}),
+            ):
+                ready = runtime.mappings()[0]
+                self.assertTrue(ready["active"])
+                self.assertEqual(ready["available_video_count"], 1)
+                self.assertEqual(runtime.status()["active_gifts"][0]["gift"], "rose")
+
+                media.unlink()
+                missing = runtime.mappings()[0]
+                self.assertFalse(missing["active"])
+                self.assertEqual(missing["readiness"], "Không tìm thấy file video")
+                self.assertEqual(runtime.status()["active_gifts"], [])
+
     def test_legacy_direct_media_mapping_migrates_to_action_preset(self) -> None:
         from tiktok_backend import core
 
@@ -172,6 +217,33 @@ class TestBackendApi(unittest.TestCase):
                 self.assertEqual(saved_actions["actions"]["gift_rose"]["videos"], ["rose.mp4"])
                 saved_mapping = json.loads((root / "gift_config.json").read_text(encoding="utf-8"))
                 self.assertEqual(saved_mapping["mappings"][0]["action_id"], "gift_rose")
+
+    def test_catalog_save_rolls_back_actions_when_mapping_save_fails(self) -> None:
+        from tiktok_backend import core
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            action_file = root / "action_presets.json"
+            mapping_file = root / "gift_config.json"
+            action_file.write_text('{"version": 2, "actions": {"old": {}}}', encoding="utf-8")
+            mapping_file.write_text('{"version": 2, "mappings": []}', encoding="utf-8")
+            old_action = core.ActionPreset(id="old", name="Old", videos=["old.mp4"], sound_filename="")
+            runtime = BackendRuntime.__new__(BackendRuntime)
+            with (
+                patch.object(core, "ACTION_PRESETS_FILE", action_file),
+                patch.object(core, "CONFIG_FILE", mapping_file),
+                patch.object(core, "ACTION_PRESETS", {"old": old_action}),
+                patch.object(core, "GIFT_MAPPING", {"rose": ("old", 1, "", "main")}),
+                patch.object(runtime, "save_mappings", side_effect=OSError("disk full")),
+            ):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    runtime.save_catalog(
+                        [{"id": "new", "name": "New", "videos": ["new.mp4"], "sound": ""}],
+                        [{"gift": "rose", "action": "new", "priority": 1}],
+                    )
+                self.assertEqual(list(core.ACTION_PRESETS), ["old"])
+                self.assertEqual(core.GIFT_MAPPING["rose"][0], "old")
+                self.assertIn('"old"', action_file.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

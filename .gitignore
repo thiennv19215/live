@@ -5,6 +5,7 @@ build/
 dist/
 node_modules/
 .dev-python/
+.build-python/
 *-dev*.log
 *.egg-info/
 .idea/

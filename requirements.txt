@@ -1,4 +1,4 @@
-TikTokLive
-obsws-python
-websocket-client
-websockets
+TikTokLive==6.6.6
+obsws-python==1.8.0
+websocket-client==1.9.0
+websockets==17.0.1

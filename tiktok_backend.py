@@ -45,6 +45,7 @@ class RecentLogHandler(logging.Handler):
 
 class BackendRuntime:
     def __init__(self) -> None:
+        self._catalog_lock = threading.RLock()
         idle_path = core.resolve_existing_media_path(core.get_idle_video_path("main"))
         self.overlay = LocalOverlayServer(idle_path)
         self.overlay_error = ""
@@ -123,30 +124,56 @@ class BackendRuntime:
         result = []
         for gift, value in core.GIFT_MAPPING.items():
             videos, sound, action_name = core.resolve_gift_action_media(str(value[0]), str(value[2]))
+            available_videos = [
+                video for video in videos
+                if video and core.resolve_existing_media_path(Path(video)).is_file()
+            ]
+            missing_videos = [video for video in videos if video and video not in available_videos]
+            action_id = str(value[0]) if str(value[0]) in core.ACTION_PRESETS else ""
+            if not str(value[0]).strip():
+                readiness = "Chưa chọn hành động"
+            elif not videos or not any(str(video).strip() for video in videos):
+                readiness = "Hành động chưa có video"
+            elif not available_videos:
+                readiness = "Không tìm thấy file video"
+            elif missing_videos:
+                readiness = f"Sẵn sàng {len(available_videos)}/{len(videos)} video"
+            else:
+                readiness = f"Sẵn sàng {len(available_videos)} video"
             result.append(
                 {
                     "gift": gift,
                     "action": str(value[0]),
-                    "action_id": str(value[0]) if str(value[0]) in core.ACTION_PRESETS else "",
+                    "action_id": action_id,
                     "priority": int(value[1]),
                     "sound": str(value[2]),
                     "action_name": action_name,
                     "videos": videos,
                     "resolved_sound": sound,
+                    "active": bool(available_videos),
+                    "available_video_count": len(available_videos),
+                    "missing_videos": missing_videos,
+                    "readiness": readiness,
                 }
             )
         return result
 
     def actions(self) -> list[dict[str, Any]]:
-        return [
-            {
+        result = []
+        for preset in core.ACTION_PRESETS.values():
+            available_videos = [
+                video for video in preset.videos
+                if video and core.resolve_existing_media_path(Path(video)).is_file()
+            ]
+            result.append({
                 "id": preset.id,
                 "name": preset.name,
                 "videos": list(preset.videos),
                 "sound": preset.sound_filename,
-            }
-            for preset in core.ACTION_PRESETS.values()
-        ]
+                "active": bool(available_videos),
+                "available_video_count": len(available_videos),
+            })
+        return result
 
     @staticmethod
     def _action_id(value: str, fallback: str = "action") -> str:
@@ -209,6 +236,48 @@ class BackendRuntime:
         core.GIFT_MAPPING.update(mapping)
         core.save_gift_mapping(mapping)
         return self.mappings()
+
+    @staticmethod
+    def _restore_catalog_file(path: Path, contents: bytes | None) -> None:
+        if contents is None:
+            path.unlink(missing_ok=True)
+            return
+        temporary = path.with_name(f".{path.name}.rollback")
+        temporary.write_bytes(contents)
+        temporary.replace(path)
+
+    def save_catalog(
+        self,
+        action_items: list[dict[str, Any]],
+        mapping_items: list[dict[str, Any]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Save actions and gift mappings as one logical operation."""
+        lock = getattr(self, "_catalog_lock", None)
+        if lock is None:
+            lock = self._catalog_lock = threading.RLock()
+
+        with lock:
+            previous_actions = core.ACTION_PRESETS.copy()
+            previous_mappings = core.GIFT_MAPPING.copy()
+            action_file = core.ACTION_PRESETS_FILE
+            mapping_file = core.CONFIG_FILE
+            previous_action_file = action_file.read_bytes() if action_file.is_file() else None
+            previous_mapping_file = mapping_file.read_bytes() if mapping_file.is_file() else None
+            try:
+                actions = self.save_actions(action_items)
+                mappings = self.save_mappings(mapping_items)
+            except Exception:
+                core.ACTION_PRESETS.clear()
+                core.ACTION_PRESETS.update(previous_actions)
+                core.GIFT_MAPPING.clear()
+                core.GIFT_MAPPING.update(previous_mappings)
+                try:
+                    self._restore_catalog_file(action_file, previous_action_file)
+                    self._restore_catalog_file(mapping_file, previous_mapping_file)
+                except Exception:
+                    logging.getLogger(__name__).exception("Khong the rollback kho hanh dong")
+                raise
+            return {"actions": actions, "mappings": mappings}
 
     async def _start_app(self, mock_mode: bool, enable_tiktok: bool, enable_obs: bool) -> None:
         if self.app_task and not self.app_task.done():
@@ -303,6 +372,17 @@ class BackendRuntime:
 
     def status(self) -> dict[str, Any]:
         app = self.app
+        configured_mappings = self.mappings()
+        active_gifts = [
+            {
+                "gift": item["gift"],
+                "action_name": item["action_name"],
+                "priority": item["priority"],
+                "video_count": item["available_video_count"],
+            }
+            for item in configured_mappings
+            if item["active"]
+        ]
         running = bool(self.app_task and not self.app_task.done())
         queue_items = app.queue.get_items() if app else []
         current = self._serialize_job(app.current_job) if app and app.current_job else None
@@ -330,6 +410,8 @@ class BackendRuntime:
             "current": current,
             "queue": [self._serialize_job(item) for item in queue_items],
             "gift_history": gift_history,
+            "active_gifts": active_gifts,
+            "inactive_gift_count": len(configured_mappings) - len(active_gifts),
             "playback_state": "action" if current else "idle",
             "queue_pending": len(queue_items),
             "queue_total": len(queue_items) + (1 if current else 0),
@@ -448,6 +530,12 @@ class BackendRequestHandler(BaseHTTPRequestHandler):
                 if not isinstance(items, list):
                     raise ValueError("items must be a list")
                 result = runtime.save_actions(items)
+            elif self.path == "/api/catalog":
+                actions = body.get("actions", [])
+                mappings = body.get("mappings", [])
+                if not isinstance(actions, list) or not isinstance(mappings, list):
+                    raise ValueError("actions and mappings must be lists")
+                result = runtime.save_catalog(actions, mappings)
             elif self.path == "/api/media/idle":
                 result = {"path": runtime.set_idle_video(str(body.get("path", "")))}
             elif self.path == "/api/shutdown":

@@ -6,18 +6,31 @@ Mở `dist/TikTokLiveStudio.exe`. Electron tự chạy `TikTokLiveBackend.exe` �
 
 ### Chạy nhanh ở chế độ dev
 
-Trong thư mục `electron_output`, chạy Vite bằng `npm run dev`. Ở terminal thứ hai, đặt `ELECTRON_RENDERER_URL=http://127.0.0.1:5173` rồi chạy `npm start`. Electron tự thêm thư mục `.dev-python` vào `PYTHONPATH`; có thể đặt `PYTHON_EXECUTABLE` nếu muốn dùng một Python cụ thể.
+Tạo môi trường Python và cài backend một lần từ thư mục gốc:
+
+```powershell
+python -m venv .dev-python
+.\.dev-python\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+Trong thư mục `electron_output`, chạy Vite bằng `npm run dev`. Ở terminal thứ hai, trỏ Electron vào đúng renderer và Python vừa tạo rồi chạy `npm start`:
+
+```powershell
+$env:ELECTRON_RENDERER_URL = "http://127.0.0.1:5173"
+$env:PYTHON_EXECUTABLE = (Resolve-Path "..\.dev-python\Scripts\python.exe")
+npm start
+```
 
 Chế độ mặc định là **TikTok Studio trực tiếp**: preview điều khiển luôn tắt âm, cửa sổ `TikTok Live Output` là nguồn hình/âm duy nhất. Chỉ bật `Đồng bộ OBS` trong phần cài đặt nếu thực sự muốn phát qua OBS; không đưa đồng thời cả OBS và cửa sổ output vào TikTok Studio vì sẽ tạo hai đường audio.
 
-## Dedicated Electron output
+## Cửa sổ Output cho TikTok Studio
 
-1. Choose an aspect ratio in `OUTPUT EXE - TIKTOK STUDIO` (`9:16` is recommended for vertical live video).
-2. Click `MO OUTPUT EXE` and keep the clean video window open.
-3. In TikTok Studio, add a camera/full-screen or window source and select `TikTok Live Output.exe` (the release file is named `TikTokLiveOutput.exe`).
-4. Fit that source to the canvas. Changing the ratio restarts the active output at the new aspect ratio.
+1. Chọn tỉ lệ output trong Control Room (`9:16` phù hợp với live dọc).
+2. Bấm `Mở output`.
+3. Trong TikTok Studio, thêm nguồn cửa sổ và chọn `TikTok Live Stage Output (...)`.
+4. Căn nguồn vào canvas. Có thể chuyển sang `Chạy ngầm` sau khi TikTok Studio đã nhận đúng cửa sổ.
 
-The available presets are `9:16`, `16:9`, `1:1`, and `4:5`. Press `F11` to toggle full screen or `Esc` to close the output window. The existing Browser Overlay remains available as a fallback.
+Các tỉ lệ hỗ trợ gồm `9:16`, `16:9`, `1:1` và `4:5`. Nhấn `F11` để bật/tắt toàn màn hình hoặc `Esc` để đóng output. Không có file `TikTokLiveOutput.exe` riêng; output là cửa sổ con do `TikTokLiveStudio.exe` quản lý.
 
 Ứng dụng nhận sự kiện quà TikTok realtime và phát trực tiếp sang TikTok Studio; OBS là tích hợp tùy chọn.
 
@@ -43,16 +56,12 @@ The available presets are `9:16`, `16:9`, `1:1`, and `4:5`. Press `F11` to toggl
 
 Overlay chỉ lắng nghe trên `127.0.0.1`, không mở ra mạng LAN và không cần quyền quay màn hình. Thêm `?muted=1` nếu muốn tắt âm thanh, hoặc `?fit=contain` nếu muốn giữ trọn khung hình thay vì lấp đầy màn hình dọc.
 
-## Thiết lập OBS theo layer nhân vật
-
-Để thay riêng từng nhân vật mà không chồng hình, tạo các source trong cùng Scene theo thứ tự từ trên xuống:
-
-1. `Action_Source_4`, `Idle_Source_4`
-2. `Action_Source_3`, `Idle_Source_3`
-3. `Action_Source_2`, `Idle_Source_2`
-4. `Action_Source_1`, `Idle_Source_1`
-5. Background cố định, có thể là Image hoặc Media Source bất kỳ
-
-Mỗi `Idle_Source_N` và `Action_Source_N` nên dùng WebM VP9 có alpha hoặc MOV ProRes 4444 nền trong suốt. Background không được chứa sẵn nhân vật.
+## Thiết lập OBS tùy chọn
 
 OBS chỉ cần hai Media Source trong scene: `Idle_Source` cho video nền lặp liên tục và `Action_Source` cho video hành động. Khi nhận quà, ứng dụng bật `Action_Source`, tạm ẩn nền, rồi tự quay lại `Idle_Source` khi hành động kết thúc.
+
+Chế độ nhiều layer nhân vật (`Idle_Source_N`/`Action_Source_N`) đã được thay bằng luồng hai source dùng chung và không còn được hướng dẫn cho bản hiện tại.
+
+## Build bản phát hành
+
+Chạy `./build_exe.ps1` từ PowerShell. Script tự tạo `.build-python`, cài các phiên bản trong `requirements-build.txt`, chạy test Electron và đóng gói backend cùng Control Room.

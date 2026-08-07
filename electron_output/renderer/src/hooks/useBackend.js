@@ -14,6 +14,8 @@ const EMPTY_STATUS = {
   playback_state: "idle",
   queue_pending: 0,
   queue_total: 0,
+  active_gifts: [],
+  inactive_gift_count: 0,
   progress: 0,
   remaining: 0,
 };

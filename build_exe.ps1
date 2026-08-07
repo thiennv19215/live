@@ -1,11 +1,20 @@
 $ErrorActionPreference = "Stop"
+Set-Location -LiteralPath $PSScriptRoot
 
-Write-Host "Installing/updating PyInstaller..." -ForegroundColor Cyan
-python -m pip install pyinstaller
-if ($LASTEXITCODE -ne 0) { throw "PyInstaller install failed" }
+$buildEnvironment = Join-Path $PSScriptRoot ".build-python"
+$buildPython = Join-Path $buildEnvironment "Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $buildPython)) {
+    Write-Host "Creating isolated Python build environment..." -ForegroundColor Cyan
+    python -m venv $buildEnvironment
+    if ($LASTEXITCODE -ne 0) { throw "Python build environment creation failed" }
+}
+
+Write-Host "Installing locked backend/build dependencies..." -ForegroundColor Cyan
+& $buildPython -m pip install --disable-pip-version-check -r (Join-Path $PSScriptRoot "requirements-build.txt")
+if ($LASTEXITCODE -ne 0) { throw "Backend/build dependency install failed" }
 
 Write-Host "Building TikTokLiveBackend.exe..." -ForegroundColor Cyan
-python -m PyInstaller `
+& $buildPython -m PyInstaller `
     --noconfirm `
     --clean `
     --windowed `

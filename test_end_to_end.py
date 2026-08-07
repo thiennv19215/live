@@ -641,6 +641,35 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(len(restart_calls), 1)
 
+    async def test_action_preload_reports_fallback_when_decoder_errors(self) -> None:
+        obs = core.ObsController(mock_mode=False)
+        obs._client = object()
+        obs.is_connected = True
+        obs._scene_items_cache = {
+            core.IDLE_SOURCE_NAME: 11,
+            core.ACTION_SOURCE_NAME: 12,
+        }
+        obs._scene_item_indices = {
+            core.IDLE_SOURCE_NAME: 1,
+            core.ACTION_SOURCE_NAME: 2,
+        }
+        obs._scene_item_count = 3
+
+        class ErrorStatus:
+            media_state = "OBS_MEDIA_STATE_ERROR"
+
+        async def request(method_name: str, **_kwargs: object) -> object:
+            return ErrorStatus() if method_name == "get_media_input_status" else None
+
+        with (
+            patch.object(obs, "_request", side_effect=request),
+            self.assertLogs("tiktok-obs", level="WARNING") as captured,
+        ):
+            ready = await obs._preload_action_source()
+
+        self.assertFalse(ready)
+        self.assertIn("Preload chua san sang", "\n".join(captured.output))
+
     async def test_revealing_preloaded_action_does_not_restart_decoder(self) -> None:
         obs = core.ObsController(mock_mode=False)
         obs._client = object()

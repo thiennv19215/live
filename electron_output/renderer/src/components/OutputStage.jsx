@@ -1,5 +1,6 @@
 import { ExternalLink, Eye, EyeOff, FolderOpen, Library, MonitorUp, Square, Trash2, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useState } from "react";
+import { resolveHiddenChange, resolveOutputStatus } from "../../../output-state.mjs";
 
 const RATIOS = {
   "9:16": [1080, 1920],
@@ -33,16 +34,16 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
   const [width, height] = RATIOS[ratio];
 
   useEffect(() => {
-    window.desktop?.getOutputStatus?.().then((next) => {
-      const open = Boolean(next?.open);
-      setOutputOpen(open);
-      if (typeof next?.hidden === "boolean") {
-        setOutputHidden(next.hidden);
-      }
-      if (open) setPreviewMuted(true);
-    });
+    window.desktop?.getOutputStatus?.()
+      .then((next) => {
+        const open = Boolean(next?.open);
+        setOutputOpen(open);
+        setOutputHidden((savedHidden) => resolveOutputStatus(savedHidden, next).hidden);
+        if (open) setPreviewMuted(true);
+      })
+      .catch((error) => onNotice(`Không đọc được trạng thái Output: ${error.message}`, "error"));
     return window.desktop?.onOutputClosed?.(() => setOutputOpen(false));
-  }, []);
+  }, [onNotice]);
 
   useEffect(() => {
     setPreviewMuted(true);
@@ -53,11 +54,21 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
   }, [mappings, selectedGift]);
 
   const toggleHiddenMode = async (nextHidden) => {
-    setOutputHidden(nextHidden);
-    window.localStorage.setItem("output-hidden-mode", String(nextHidden));
-    if (outputOpen) {
-      await window.desktop?.setOutputHidden?.(nextHidden);
-      onNotice(nextHidden ? "Output đã chuyển sang chạy ngầm" : "Output đã hiện lên màn hình");
+    try {
+      const confirmedHidden = outputOpen
+        ? resolveHiddenChange(await window.desktop?.setOutputHidden?.(nextHidden))
+        : nextHidden;
+      setOutputHidden(confirmedHidden);
+      window.localStorage.setItem("output-hidden-mode", String(confirmedHidden));
+      if (outputOpen) {
+        onNotice(confirmedHidden ? "Output đã chuyển sang chạy ngầm" : "Output đã hiện lên màn hình");
+      }
+    } catch (error) {
+      const next = await window.desktop?.getOutputStatus?.().catch(() => null);
+      const resolved = resolveOutputStatus(outputHidden, next);
+      setOutputOpen(resolved.open);
+      setOutputHidden(resolved.hidden);
+      onNotice(`Không đổi được chế độ Output: ${error.message}`, "error");
     }
   };
 
