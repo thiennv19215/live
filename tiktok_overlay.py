@@ -39,8 +39,9 @@ OVERLAY_HTML = r"""<!doctype html>
       object-position: center;
       background: transparent;
       opacity: 0;
-      transform: scale(var(--media-zoom, 1));
-      will-change: opacity;
+      transform: scale(var(--media-zoom, 1)) translateZ(0);
+      will-change: opacity, transform;
+      backface-visibility: hidden;
       /* Idle is kept alive under the action, so this is a real cross-fade
          instead of exposing a black frame while media is swapped. */
       transition: opacity 220ms cubic-bezier(.22, .61, .36, 1);

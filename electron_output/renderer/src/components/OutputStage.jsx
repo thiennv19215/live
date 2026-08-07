@@ -1,4 +1,4 @@
-import { ExternalLink, FolderOpen, Library, MonitorUp, Square, Trash2, Volume2, VolumeX } from "lucide-react";
+import { ExternalLink, Eye, EyeOff, FolderOpen, Library, MonitorUp, Square, Trash2, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useState } from "react";
 
 const RATIOS = {
@@ -25,6 +25,7 @@ const initialFillMode = () => {
 export function OutputStage({ status, config, setConfig, mappings, setMappings, post, onNotice, showLibrary = true }) {
   const [outputOpen, setOutputOpen] = useState(false);
   const [outputBusy, setOutputBusy] = useState(false);
+  const [outputHidden, setOutputHidden] = useState(() => window.localStorage.getItem("output-hidden-mode") === "true");
   const [previewMuted, setPreviewMuted] = useState(true);
   const [selectedGift, setSelectedGift] = useState("");
   const [fillMode, setFillMode] = useState(initialFillMode);
@@ -35,6 +36,9 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
     window.desktop?.getOutputStatus?.().then((next) => {
       const open = Boolean(next?.open);
       setOutputOpen(open);
+      if (typeof next?.hidden === "boolean") {
+        setOutputHidden(next.hidden);
+      }
       if (open) setPreviewMuted(true);
     });
     return window.desktop?.onOutputClosed?.(() => setOutputOpen(false));
@@ -47,6 +51,15 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
   useEffect(() => {
     if (!selectedGift && mappings?.length) setSelectedGift(mappings[0].gift);
   }, [mappings, selectedGift]);
+
+  const toggleHiddenMode = async (nextHidden) => {
+    setOutputHidden(nextHidden);
+    window.localStorage.setItem("output-hidden-mode", String(nextHidden));
+    if (outputOpen) {
+      await window.desktop?.setOutputHidden?.(nextHidden);
+      onNotice(nextHidden ? "Output đã chuyển sang chạy ngầm" : "Output đã hiện lên màn hình");
+    }
+  };
 
   const pickIdle = async () => {
     const path = await window.desktop?.pickMedia?.({ title: "Chọn video nền", copyToLibrary: true });
@@ -90,10 +103,10 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
     }
     setOutputBusy(true);
     try {
-      await window.desktop?.openOutput?.({ url: outputUrl(status.overlay_url, fillMode), ratio, width, height });
+      await window.desktop?.openOutput?.({ url: outputUrl(status.overlay_url, fillMode), ratio, width, height, hidden: outputHidden });
       setOutputOpen(true);
       setPreviewMuted(true);
-      onNotice("Output đã sẵn sàng cho TikTok Studio");
+      onNotice(outputHidden ? "Output đang chạy ngầm (TikTok Studio vẫn bắt bình thường)" : "Output đã sẵn sàng cho TikTok Studio");
     } catch (error) {
       onNotice(`Không mở được Output: ${error.message}`, "error");
     } finally {
@@ -113,7 +126,7 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
     await post("/api/config", next);
     if (outputOpen) {
       const [nextWidth, nextHeight] = RATIOS[output_ratio];
-      await window.desktop?.openOutput?.({ url: outputUrl(status.overlay_url, fillMode), ratio: output_ratio, width: nextWidth, height: nextHeight });
+      await window.desktop?.openOutput?.({ url: outputUrl(status.overlay_url, fillMode), ratio: output_ratio, width: nextWidth, height: nextHeight, hidden: outputHidden });
     }
   };
 
@@ -121,7 +134,7 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
     const nextMode = event.target.value;
     setFillMode(nextMode);
     window.localStorage.setItem("output-fill-mode", nextMode);
-    if (outputOpen) await window.desktop?.openOutput?.({ url: outputUrl(status.overlay_url, nextMode), ratio, width, height });
+    if (outputOpen) await window.desktop?.openOutput?.({ url: outputUrl(status.overlay_url, nextMode), ratio, width, height, hidden: outputHidden });
   };
 
   const frameStyle = { aspectRatio: `${width} / ${height}`, "--preview-zoom": 1 };
@@ -149,6 +162,13 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
         </div>
         <div className="stage-controls">
           {!showLibrary ? <button className="toolbar-action danger" onClick={() => post("/api/queue/clear")}><Trash2 size={14} /> Dừng &amp; xóa</button> : null}
+          <button
+            className={`toolbar-action ${outputHidden ? "active" : ""}`}
+            onClick={() => toggleHiddenMode(!outputHidden)}
+            title={outputHidden ? "Đang bật chạy ngầm (Cửa sổ ẩn khỏi màn hình)" : "Đang hiện cửa sổ nổi trên màn hình"}
+          >
+            {outputHidden ? <EyeOff size={14} /> : <Eye size={14} />} {outputHidden ? "Chạy ngầm" : "Hiện cửa sổ"}
+          </button>
           <button className="toolbar-action" onClick={() => setPreviewMuted((current) => !current)} title={previewMuted ? "Bật âm preview" : "Tắt âm preview"}>
             {previewMuted ? <VolumeX size={14} /> : <Volume2 size={14} />} {previewMuted ? "Preview tắt âm" : "Âm preview"}
           </button>
@@ -158,8 +178,8 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
           <select value={ratio} onChange={changeRatio} aria-label="Tỉ lệ output">
             {Object.keys(RATIOS).map((item) => <option key={item}>{item}</option>)}
           </select>
-          <button className={outputOpen ? "output-live-button" : "output-button"} onClick={openOutput} disabled={outputOpen || outputBusy}>
-            <MonitorUp size={16} /> {outputBusy ? "Đang mở…" : outputOpen ? "Output đang mở" : "Mở output"}
+          <button className={outputOpen ? (outputHidden ? "output-live-button hidden-mode" : "output-live-button") : "output-button"} onClick={openOutput} disabled={outputOpen || outputBusy}>
+            <MonitorUp size={16} /> {outputBusy ? "Đang mở…" : outputOpen ? (outputHidden ? "Output ngầm đang mở" : "Output đang mở") : "Mở output"}
           </button>
           {outputOpen ? <button className="icon-button" onClick={closeOutput} title="Đóng output"><Square size={15} /></button> : null}
         </div>
@@ -168,7 +188,11 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
       <div className="stage-body">
         <div className={`preview-frame ratio-${ratio.replace(":", "-")} ${outputOpen ? "output-active" : ""}`} style={frameStyle}>
           {outputOpen ? (
-            <div className="preview-offline">Preview đã ẩn vì Output đang mở</div>
+            <div className="preview-offline">
+              {outputHidden
+                ? "Output đang chạy ngầm cho TikTok Studio (Cửa sổ đã ẩn để nhẹ máy)"
+                : "Preview đã ẩn vì Output đang mở trên màn hình"}
+            </div>
           ) : status.overlay_url ? (
             <iframe src={previewUrl(status.overlay_url, fillMode, previewMuted)} title="Live output preview" />
           ) : (

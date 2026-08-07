@@ -29,7 +29,9 @@ log(`startup argv=${JSON.stringify(process.argv)} outputOnly=${isOutputOnly} dev
 process.on("uncaughtException", (error) => log(`uncaughtException: ${error.stack || error}`));
 process.on("unhandledRejection", (error) => log(`unhandledRejection: ${error?.stack || error}`));
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
-app.disableHardwareAcceleration();
+app.commandLine.appendSwitch("enable-gpu-rasterization");
+app.commandLine.appendSwitch("enable-zero-copy");
+app.commandLine.appendSwitch("ignore-gpu-blocklist");
 app.setName(isOutputOnly ? "TikTok Live Output" : "TikTok Live Control Room");
 app.setAppUserModelId("io.streamtoearn.tiktok-live-control-room");
 
@@ -102,23 +104,56 @@ function saveOutputBounds(bounds) {
   } catch {}
 }
 
+function applyOutputHiddenState(hidden) {
+  if (!outputWindow || outputWindow.isDestroyed()) return false;
+  const targetHidden = Boolean(hidden);
+  outputWindow._isHidden = targetHidden;
+  if (targetHidden) {
+    outputWindow.setSkipTaskbar(true);
+    outputWindow.setPosition(-32000, -32000);
+    outputWindow.showInactive();
+  } else {
+    outputWindow.setSkipTaskbar(false);
+    const savedBounds = loadOutputBounds();
+    let restored = false;
+    if (savedBounds) {
+      const display = screen.getDisplayMatching(savedBounds);
+      if (display) {
+        outputWindow.setBounds({
+          x: savedBounds.x,
+          y: savedBounds.y,
+          width: Math.max(240, savedBounds.width),
+          height: Math.max(240, savedBounds.height),
+        });
+        restored = true;
+      }
+    }
+    if (!restored) {
+      outputWindow.center();
+    }
+    if (outputWindow.isMinimized()) outputWindow.restore();
+    outputWindow.show();
+    outputWindow.focus();
+  }
+  return targetHidden;
+}
+
 async function createOutputWindow(options, standalone = false) {
   if (!isAllowedUrl(options.url)) throw new Error("Only localhost overlay URLs are allowed");
 
   const title = `TikTok Live Stage Output (${options.ratio})`;
+  const wantHidden = Boolean(options.hidden);
 
   if (outputWindow && !outputWindow.isDestroyed()) {
     outputWindow.setAspectRatio(options.width / options.height);
     outputWindow.setTitle(title);
-    if (outputWindow.isMinimized()) outputWindow.restore();
-    outputWindow.show();
-    outputWindow.focus();
+    applyOutputHiddenState(wantHidden);
     try {
       await loadUrlWithTimeout(outputWindow, options.url);
     } catch (error) {
       log(`Output reload error: ${error.message}`);
     }
-    return { open: true, title: outputWindow.getTitle() };
+    return { open: true, hidden: outputWindow._isHidden, title: outputWindow.getTitle() };
   }
 
   const savedBounds = loadOutputBounds();
@@ -143,8 +178,8 @@ async function createOutputWindow(options, standalone = false) {
   }
 
   outputWindow = new BrowserWindow({
-    x,
-    y,
+    x: wantHidden ? -32000 : x,
+    y: wantHidden ? -32000 : y,
     width,
     height,
     minWidth: 240,
@@ -155,24 +190,28 @@ async function createOutputWindow(options, standalone = false) {
     title,
     show: false,
     autoHideMenuBar: true,
-    skipTaskbar: false,
+    skipTaskbar: wantHidden,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
       devTools: false,
+      backgroundThrottling: false,
     },
   });
+  outputWindow._isHidden = wantHidden;
   outputWindow.setAspectRatio(options.width / options.height);
   outputWindow.setMenu(null);
   secureLocalNavigation(outputWindow);
 
   let saveTimer = null;
   const persistBounds = () => {
-    if (!outputWindow || outputWindow.isDestroyed() || outputWindow.isMinimized() || outputWindow.isFullScreen()) return;
+    if (!outputWindow || outputWindow.isDestroyed() || outputWindow.isMinimized() || outputWindow.isFullScreen() || outputWindow._isHidden) return;
+    const bounds = outputWindow.getBounds();
+    if (bounds.x < -10000 || bounds.y < -10000) return;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      if (outputWindow && !outputWindow.isDestroyed()) {
+      if (outputWindow && !outputWindow.isDestroyed() && !outputWindow._isHidden) {
         saveOutputBounds(outputWindow.getBounds());
       }
     }, 300);
@@ -198,7 +237,15 @@ async function createOutputWindow(options, standalone = false) {
       video, img, canvas { pointer-events: none !important; }
     `);
   });
-  outputWindow.once("ready-to-show", () => outputWindow?.show());
+  outputWindow.once("ready-to-show", () => {
+    if (outputWindow) {
+      if (outputWindow._isHidden) {
+        outputWindow.showInactive();
+      } else {
+        outputWindow.show();
+      }
+    }
+  });
   outputWindow.on("closed", () => {
     clearTimeout(saveTimer);
     outputWindow = null;
@@ -214,7 +261,7 @@ async function createOutputWindow(options, standalone = false) {
     outputWindow = null;
     throw error;
   }
-  return { open: true, title: outputWindow.getTitle() };
+  return { open: true, hidden: outputWindow._isHidden, title: outputWindow.getTitle() };
 }
 
 
@@ -314,9 +361,16 @@ function registerControllerIpc() {
   ipcMain.handle("output:open", (_event, options) => createOutputWindow(options));
   ipcMain.handle("output:close", () => {
     outputWindow?.close();
-    return { open: false };
+    return { open: false, hidden: false };
   });
-  ipcMain.handle("output:status", () => ({ open: Boolean(outputWindow && !outputWindow.isDestroyed()) }));
+  ipcMain.handle("output:set-hidden", (_event, hidden) => ({
+    open: Boolean(outputWindow && !outputWindow.isDestroyed()),
+    hidden: applyOutputHiddenState(hidden),
+  }));
+  ipcMain.handle("output:status", () => ({
+    open: Boolean(outputWindow && !outputWindow.isDestroyed()),
+    hidden: Boolean(outputWindow && !outputWindow.isDestroyed() && outputWindow._isHidden),
+  }));
   ipcMain.handle("dialog:pick-media", async (_event, options = {}) => {
     const multiple = Boolean(options.multiple);
     const result = await dialog.showOpenDialog(controllerWindow, {
@@ -384,6 +438,7 @@ async function createControllerWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      backgroundThrottling: false,
     },
   });
   controllerWindow.setMenu(null);

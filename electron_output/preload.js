@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("desktop", {
   backendUrl,
   openOutput: (options) => ipcRenderer.invoke("output:open", options),
   closeOutput: () => ipcRenderer.invoke("output:close"),
+  setOutputHidden: (hidden) => ipcRenderer.invoke("output:set-hidden", hidden),
   getOutputStatus: () => ipcRenderer.invoke("output:status"),
   onOutputClosed: (callback) => {
     const listener = () => callback();
