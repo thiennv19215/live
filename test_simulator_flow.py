@@ -100,13 +100,13 @@ class TestTikTokLiveStreamSimulator(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(status["mock_mode"])
 
         # Test API thêm quà bằng thủ công (Test Gift Button)
-        res = runtime.enqueue_action("rose", count=2)
-        self.assertEqual(res["queued"], 2)
+        res = runtime.enqueue_gifts("rose", 2)
+        self.assertEqual(res, 2)
         self.assertEqual(len(self.app.queue), 2)
 
         # Test API xóa hàng chờ (Clear Queue)
         cleared_res = runtime.clear_queue()
-        self.assertEqual(cleared_res["cleared"], 2)
+        self.assertEqual(cleared_res, 2)
         self.assertEqual(len(self.app.queue), 0)
 
         runtime.app_task.cancel()

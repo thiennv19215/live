@@ -74,6 +74,10 @@ class BackendRuntime:
             "file": job.file_path.name,
             "priority": job.priority,
             "sound": job.sound_path.name if job.sound_path else "",
+            "sender": job.sender,
+            "count": job.repeat_count,
+            "diamonds": job.diamonds,
+            "timestamp": job.timestamp,
         }
 
     def config(self) -> dict[str, Any]:
@@ -245,24 +249,32 @@ class BackendRuntime:
     def submit(self, coroutine: Any) -> Any:
         return asyncio.run_coroutine_threadsafe(coroutine, self.loop).result(timeout=5)
 
-    def enqueue_gift(self, gift: str) -> None:
+    def enqueue_gift(self, gift: str, sender: str = "Người xem", repeat_count: int = 1, diamonds: int = 0) -> None:
         if not self.app:
             raise RuntimeError("Hệ thống chưa chạy")
-        self.submit(self.app.enqueue_gift(gift))
+        self.submit(self.app.enqueue_gift(gift, sender=sender, repeat_count=repeat_count, diamonds=diamonds))
 
-    def enqueue_gifts(self, gift: str, count: int) -> int:
+    def enqueue_gifts(self, gift: str, count: int, sender: str = "Người xem", diamonds: int = 0) -> int:
         if not self.app:
             raise RuntimeError("Hệ thống chưa chạy")
 
         async def enqueue_batch() -> int:
+            per_diamond = diamonds // max(1, count)
             for _ in range(count):
-                await self.app.enqueue_gift(gift)
+                await self.app.enqueue_gift(gift, sender=sender, repeat_count=1, diamonds=per_diamond)
             return count
 
         return int(self.submit(enqueue_batch()))
 
     def clear_queue(self) -> int:
         return int(self.submit(self.app.clear_all_playback())) if self.app else 0
+
+    def clear_gift_history(self) -> int:
+        if not self.app:
+            return 0
+        count = len(self.app.gift_history)
+        self.app.gift_history.clear()
+        return count
 
     def set_idle_video(self, path_value: str) -> str:
         path = Path(path_value).expanduser().resolve()
@@ -302,6 +314,7 @@ class BackendRuntime:
             "overlay_error": self.overlay_error,
             "current": current,
             "queue": [self._serialize_job(item) for item in queue_items],
+            "gift_history": list(app.gift_history) if app else [],
             "playback_state": "action" if current else "idle",
             "queue_pending": len(queue_items),
             "queue_total": len(queue_items) + (1 if current else 0),
@@ -392,13 +405,20 @@ class BackendRequestHandler(BaseHTTPRequestHandler):
                 runtime.stop_system()
                 result = {"ok": True}
             elif self.path == "/api/queue/test":
-                runtime.enqueue_gift(str(body.get("gift", "")))
+                sender = str(body.get("sender", "")).strip() or "Người xem thử"
+                count = max(1, min(20, int(body.get("count", 1))))
+                diamonds = max(0, int(body.get("diamonds", 0)))
+                runtime.enqueue_gift(str(body.get("gift", "")), sender=sender, repeat_count=count, diamonds=diamonds)
                 result = {"ok": True}
             elif self.path == "/api/queue/test-batch":
+                sender = str(body.get("sender", "")).strip() or "Người xem thử"
                 count = max(1, min(20, int(body.get("count", 1))))
-                result = {"enqueued": runtime.enqueue_gifts(str(body.get("gift", "")), count)}
+                diamonds = max(0, int(body.get("diamonds", 0)))
+                result = {"enqueued": runtime.enqueue_gifts(str(body.get("gift", "")), count, sender=sender, diamonds=diamonds)}
             elif self.path == "/api/queue/clear":
                 result = {"cleared": runtime.clear_queue()}
+            elif self.path == "/api/queue/clear-history":
+                result = {"cleared": runtime.clear_gift_history()}
             elif self.path == "/api/config":
                 result = runtime.update_config(body)
             elif self.path == "/api/mappings":

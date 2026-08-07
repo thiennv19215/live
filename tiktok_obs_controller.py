@@ -491,6 +491,11 @@ class GiftJob:
     priority: int
     sound_path: Path | None = None
     target_char: str = "main"
+    sender: str = "Người xem"
+    repeat_count: int = 1
+    diamonds: int = 0
+    timestamp: str = ""
+
 
 
 class PriorityGiftQueue:
@@ -1231,14 +1236,16 @@ class ObsController:
     async def update_queue_text(self, current_job: GiftJob | None, queue_items: list[GiftJob]) -> None:
         lines: list[str] = []
         if current_job:
-            lines.append(f"🎬 ĐANG PHÁT: {current_job.gift_name.title()}")
+            count_str = f" (x{current_job.repeat_count})" if current_job.repeat_count > 1 else ""
+            lines.append(f"🎬 ĐANG PHÁT: {current_job.gift_name.title()}{count_str} từ {current_job.sender}")
         else:
             lines.append("🎬 ĐANG PHÁT: (Chờ quà...)")
 
         if queue_items:
             lines.append(f"⏳ HÀNG CHỜ ({len(queue_items)}):")
             for idx, job in enumerate(queue_items[:5], 1):
-                lines.append(f"  {idx}. {job.gift_name.title()}")
+                c_str = f" (x{job.repeat_count})" if job.repeat_count > 1 else ""
+                lines.append(f"  {idx}. {job.sender}: {job.gift_name.title()}{c_str}")
             if len(queue_items) > 5:
                 lines.append(f"  ... và {len(queue_items) - 5} món nữa")
         else:
@@ -1310,6 +1317,7 @@ class TikTokObsApp:
         self.enable_tiktok = enable_tiktok
         self.enable_obs = enable_obs
         self.queue = PriorityGiftQueue()
+        self.gift_history: deque[dict[str, Any]] = deque(maxlen=100)
         self.obs = ObsController(mock_mode=mock_mode)
         self.overlay = overlay
         self._stop_event = asyncio.Event()
@@ -1337,10 +1345,22 @@ class TikTokObsApp:
             return
 
         gift_name = str(getattr(event.gift, "name", "")).strip().lower()
-        await self.enqueue_gift(gift_name)
+        user_obj = getattr(event, "user", None)
+        sender = getattr(user_obj, "nickname", None) or getattr(user_obj, "unique_id", None) or "Người xem"
+        repeat_count = int(getattr(event, "repeat_count", 1) or 1)
+        per_diamond = int(getattr(event.gift, "diamond_count", 0) or 0)
+        diamond_count = per_diamond * repeat_count
+        await self.enqueue_gift(gift_name, sender=sender, repeat_count=repeat_count, diamonds=diamond_count)
 
-    async def enqueue_gift(self, gift_name: str) -> None:
+    async def enqueue_gift(
+        self,
+        gift_name: str,
+        sender: str = "Người xem",
+        repeat_count: int = 1,
+        diamonds: int = 0,
+    ) -> None:
         """Them gift vao cuoi queue FIFO; khong ngat video dang phat."""
+        import time as _time_mod
         gift_name = gift_name.strip().lower()
         mapping = GIFT_MAPPING.get(gift_name)
         if mapping is None:
@@ -1379,12 +1399,33 @@ class TikTokObsApp:
             if not resolved_sound_path.is_file():
                 LOGGER.warning("⚠️ CHÚ Ý: File âm thanh cho quà '%s' chưa tồn tại: %s", gift_name, sound_path)
 
-        job = GiftJob(gift_name, resolved_path, priority, resolved_sound_path, target_char)
+        timestamp = _time_mod.strftime("%H:%M:%S")
+        job_id = f"{gift_name}_{_time_mod.time_ns()}"
+        job = GiftJob(
+            gift_name=gift_name,
+            file_path=resolved_path,
+            priority=priority,
+            sound_path=resolved_sound_path,
+            target_char=target_char,
+            sender=sender,
+            repeat_count=repeat_count,
+            diamonds=diamonds,
+            timestamp=timestamp,
+        )
         await self.queue.put(job)
-        if len(video_files) > 1:
-            LOGGER.info("Them vao queue [%s - Random %d điệu]: %s -> %s (priority=%s, target=%s, sound=%s)", action_name, len(video_files), gift_name, resolved_path.name, priority, target_char, resolved_sound_path.name if resolved_sound_path else "None")
-        else:
-            LOGGER.info("Them vao queue [%s]: %s -> %s (priority=%s, target=%s, sound=%s)", action_name, gift_name, resolved_path.name, priority, target_char, resolved_sound_path.name if resolved_sound_path else "None")
+        self.gift_history.appendleft({
+            "id": job_id,
+            "gift": gift_name,
+            "file": resolved_path.name,
+            "priority": priority,
+            "sound": resolved_sound_path.name if resolved_sound_path else "",
+            "sender": sender,
+            "count": repeat_count,
+            "diamonds": diamonds,
+            "timestamp": timestamp,
+            "status": "queued",
+        })
+        LOGGER.info("🎁 [GIFT] %s vừa tặng %dx %s (💎%d) -> Action [%s]", sender, repeat_count, gift_name.title(), diamonds, action_name)
         await self.update_queue_display()
 
     async def enqueue_action_preset(self, preset_id: str, target_char: str = "main") -> bool:
@@ -1473,10 +1514,13 @@ class TikTokObsApp:
             if self.overlay:
                 next_jobs = self.queue.get_items()
                 next_path = next_jobs[0].file_path if next_jobs else None
+                count_str = f" {job.repeat_count}x" if job.repeat_count > 1 else " 1x"
+                diamond_str = f" (💎{job.diamonds})" if job.diamonds > 0 else ""
+                label_text = f"🎁 {job.sender} đã tặng{count_str} {job.gift_name.title()}{diamond_str}"
                 if next_path:
-                    self.overlay.show_action(job.file_path, sound_path=job.sound_path, label=job.gift_name, preload_path=next_path)
+                    self.overlay.show_action(job.file_path, sound_path=job.sound_path, label=label_text, preload_path=next_path)
                 else:
-                    self.overlay.show_action(job.file_path, sound_path=job.sound_path, label=job.gift_name)
+                    self.overlay.show_action(job.file_path, sound_path=job.sound_path, label=label_text)
 
             if self.enable_obs:
                 try:

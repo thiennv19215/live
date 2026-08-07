@@ -2,6 +2,24 @@ import { FolderOpen, Music2, Play, Plus, Save, Trash2, Video } from "lucide-reac
 
 const fileName = (path = "") => path.split(/[\\/]/).at(-1) || "Chưa gán";
 
+const POPULAR_GIFTS = [
+  { id: "rose", name: "🌹 Rose (Hoa hồng)" },
+  { id: "tiktok", name: "🎵 TikTok (Logo)" },
+  { id: "ice cream", name: "🍦 Ice Cream (Kem)" },
+  { id: "finger heart", name: "🫰 Finger Heart (Bắn tim)" },
+  { id: "doughnut", name: "🍩 Doughnut (Donut)" },
+  { id: "perfume", name: "🧴 Perfume (Nước hoa)" },
+  { id: "paper crane", name: "📜 Paper Crane (Hạc giấy)" },
+  { id: "sunglasses", name: "🕶️ Sunglasses (Kính mát)" },
+  { id: "hand heart", name: "🫶 Hand Heart (Mở tim)" },
+  { id: "cap", name: "🧢 Cap (Nón)" },
+  { id: "lion", name: "🦁 Lion (Sư tử)" },
+  { id: "sports car", name: "🏎️ Sports Car (Siêu xe)" },
+  { id: "spaceship", name: "🚀 Spaceship (Tàu vũ trụ)" },
+  { id: "dragon", name: "🐲 Dragon (Rồng)" },
+  { id: "universe", name: "🌌 TikTok Universe (Vũ trụ)" },
+];
+
 export function GiftMatrix({ mappings, setMappings, actions, setActions, post, reloadConfig, onNotice }) {
   const updateMapping = (index, key, value) => {
     setMappings((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, [key]: value } : item));
@@ -30,7 +48,7 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
   const addMapping = () => {
     const first = actions[0];
     setMappings((current) => [...current, {
-      gift: "new_gift",
+      gift: "rose",
       action: first?.id || "",
       action_id: first?.id || "",
       action_name: first?.name || "",
@@ -104,10 +122,36 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, r
         {mappings.map((item, index) => {
           const selectedId = item.action_id || item.action;
           const isLegacy = selectedId && !actions.some((action) => action.id === selectedId);
+          const isKnownPreset = POPULAR_GIFTS.some((g) => g.id === item.gift);
           return (
             <article className="gift-row" key={`${item.gift}-${index}`}>
               <div className="gift-topline assignment-topline rule-topline">
-                <input className="gift-name" value={item.gift} onChange={(event) => updateMapping(index, "gift", event.target.value)} aria-label="Tên quà" />
+                <div className="gift-picker-box">
+                  <select
+                    className="gift-preset-select"
+                    value={isKnownPreset ? item.gift : "custom"}
+                    onChange={(e) => {
+                      if (e.target.value !== "custom") {
+                        updateMapping(index, "gift", e.target.value);
+                      }
+                    }}
+                    title="Chọn quà có sẵn"
+                  >
+                    <option value="" disabled>-- Chọn quà TikTok --</option>
+                    {POPULAR_GIFTS.map((g) => (
+                      <option value={g.id} key={g.id}>{g.name}</option>
+                    ))}
+                    <option value="custom">✏️ Nhập quà khác...</option>
+                  </select>
+                  <input
+                    className="gift-name"
+                    value={item.gift}
+                    placeholder="Mã quà..."
+                    onChange={(event) => updateMapping(index, "gift", event.target.value)}
+                    aria-label="Tên quà"
+                    title="Tên mã quà TikTok (viết thường)"
+                  />
+                </div>
                 <select value={selectedId} onChange={(event) => chooseAction(index, event.target.value)} aria-label="Hành động">
                   <option value="">Chọn hành động…</option>
                   {isLegacy ? <option value={selectedId}>Cấu hình cũ · sẽ tự chuyển đổi</option> : null}

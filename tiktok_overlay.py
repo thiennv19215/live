@@ -50,23 +50,28 @@ OVERLAY_HTML = r"""<!doctype html>
     #status {
       position: absolute;
       left: 50%;
-      bottom: 4vh;
-      z-index: 3;
-      max-width: 82%;
-      transform: translateX(-50%);
-      padding: 12px 18px;
-      border: 1px solid rgba(255,255,255,.16);
-      border-radius: 999px;
-      background: rgba(5,10,18,.78);
-      color: #d9f7ff;
-      font: 600 clamp(14px, 2vw, 28px)/1.2 "Segoe UI", sans-serif;
+      top: 4vh;
+      z-index: 10;
+      max-width: 90%;
+      transform: translateX(-50%) translateY(-20px) scale(0.95);
+      padding: 14px 28px;
+      border: 1.5px solid rgba(255, 0, 127, 0.5);
+      border-radius: 50px;
+      background: linear-gradient(135deg, rgba(25, 10, 40, 0.88), rgba(10, 25, 50, 0.88));
+      box-shadow: 0 10px 35px rgba(0, 0, 0, 0.65), 0 0 22px rgba(255, 0, 127, 0.35);
+      color: #ffffff;
+      font: 700 clamp(16px, 2.2vw, 32px)/1.3 "Segoe UI", system-ui, sans-serif;
       letter-spacing: .02em;
       text-align: center;
-      backdrop-filter: blur(14px);
+      backdrop-filter: blur(16px);
       opacity: 0;
-      transition: opacity 180ms ease;
+      pointer-events: none;
+      transition: all 350ms cubic-bezier(0.34, 1.56, 0.64, 1);
     }
-    #status.visible { opacity: 1; }
+    #status.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0) scale(1);
+    }
   </style>
 </head>
 <body>

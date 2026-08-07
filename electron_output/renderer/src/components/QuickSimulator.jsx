@@ -1,6 +1,24 @@
 import { FlaskConical, Play } from "lucide-react";
 import { useEffect, useState } from "react";
 
+const GIFT_LABELS = {
+  rose: "🌹 Rose (Hoa hồng)",
+  tiktok: "🎵 TikTok (Logo)",
+  "ice cream": "🍦 Ice Cream (Kem)",
+  "finger heart": "🫰 Finger Heart (Bắn tim)",
+  doughnut: "🍩 Doughnut (Donut)",
+  perfume: "🧴 Perfume (Nước hoa)",
+  "paper crane": "📜 Paper Crane (Hạc giấy)",
+  sunglasses: "🕶️ Sunglasses (Kính mát)",
+  "hand heart": "🫶 Hand Heart (Mở tim)",
+  cap: "🧢 Cap (Nón)",
+  lion: "🦁 Lion (Sư tử)",
+  "sports car": "🏎️ Sports Car (Siêu xe)",
+  spaceship: "🚀 Spaceship (Tàu vũ trụ)",
+  dragon: "🐲 Dragon (Rồng)",
+  universe: "🌌 TikTok Universe (Vũ trụ)",
+};
+
 export function QuickSimulator({ mappings, status, post, onNotice }) {
   const [gift, setGift] = useState("");
   const [sender, setSender] = useState("Người xem thử");
@@ -34,7 +52,11 @@ export function QuickSimulator({ mappings, status, post, onNotice }) {
       <label className="field">
         <span>Tên quà / hành động</span>
         <select value={gift} onChange={(event) => setGift(event.target.value)}>
-          {(mappings || []).map((item) => <option key={item.gift} value={item.gift}>{item.gift}</option>)}
+          {(mappings || []).map((item) => (
+            <option key={item.gift} value={item.gift}>
+              {GIFT_LABELS[item.gift] || `🎁 ${item.gift}`}
+            </option>
+          ))}
         </select>
       </label>
       <label className="field">

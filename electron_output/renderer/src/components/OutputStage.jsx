@@ -132,7 +132,20 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
       <div className="stage-toolbar">
         <div>
           <span>LIVE OUTPUT</span>
-          <h2>{current ? `Đang phát: ${current.gift}` : "Video nền đang lặp"}</h2>
+          <h2>
+            {current ? (
+              <>
+                <span className="live-gift-highlight">
+                  🎁 <strong>{current.sender || "Người xem"}</strong> đã tặng{" "}
+                  <b className="gift-name-tag">{current.gift}</b>
+                  {current.count > 1 ? <span className="gift-count-tag"> x{current.count}</span> : null}
+                  {current.diamonds > 0 ? <span className="gift-diamond-tag"> (💎{current.diamonds})</span> : null}
+                </span>
+              </>
+            ) : (
+              "Video nền đang lặp"
+            )}
+          </h2>
         </div>
         <div className="stage-controls">
           {!showLibrary ? <button className="toolbar-action danger" onClick={() => post("/api/queue/clear")}><Trash2 size={14} /> Dừng &amp; xóa</button> : null}
