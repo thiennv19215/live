@@ -13,3 +13,4 @@ node_modules/
 queue_status.txt
 obs_config.json
 .ui-check-pids
+.installer-smoke/

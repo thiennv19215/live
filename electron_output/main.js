@@ -276,15 +276,20 @@ function runtimeDataDirectory() {
   return app.isPackaged ? app.getPath("userData") : path.resolve(__dirname, "..");
 }
 
+function bundledDataDirectory() {
+  return app.isPackaged ? process.resourcesPath : releaseDirectory();
+}
+
 function seedRuntimeData() {
   const targetRoot = runtimeDataDirectory();
+  const sourceRoot = bundledDataDirectory();
   fs.mkdirSync(targetRoot, { recursive: true });
   for (const name of ["gift_config.json", "action_presets.json", "obs_config.json"]) {
-    const source = path.join(releaseDirectory(), name);
+    const source = path.join(sourceRoot, name);
     const target = path.join(targetRoot, name);
     if (!fs.existsSync(target) && fs.existsSync(source)) fs.copyFileSync(source, target);
   }
-  const sourceVideos = path.join(releaseDirectory(), "videos");
+  const sourceVideos = path.join(sourceRoot, "videos");
   const targetVideos = path.join(targetRoot, "videos");
   fs.mkdirSync(targetVideos, { recursive: true });
   if (fs.existsSync(sourceVideos)) fs.cpSync(sourceVideos, targetVideos, { recursive: true, force: false });

@@ -45,6 +45,7 @@ class FakeRuntime:
         self.repeat_count = repeat_count
         self.diamonds = diamonds
         self.video_index = video_index
+        return True
 
     def enqueue_gifts(self, gift, count, sender="Người xem", diamonds=0):
         self.gift = gift
@@ -136,7 +137,7 @@ class TestBackendApi(unittest.TestCase):
     def test_start_and_queue_actions(self) -> None:
         result = self.post_json("/api/system/start", {"mock_mode": True})
         self.assertTrue(result["running"])
-        self.post_json("/api/queue/test", {"gift": "rose"})
+        self.assertTrue(self.post_json("/api/queue/test", {"gift": "rose"})["ok"])
         self.assertEqual(self.runtime.gift, "rose")
         self.assertEqual(self.post_json("/api/queue/clear", {})["cleared"], 2)
 
@@ -187,6 +188,33 @@ class TestBackendApi(unittest.TestCase):
 
         self.assertEqual(result["path"], str(media_path.resolve()))
         self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0].file_path, media_path.resolve())
+
+    def test_preview_media_resolves_a_portable_library_filename(self) -> None:
+        from tiktok_backend import BackendRuntime, core
+
+        with tempfile.TemporaryDirectory() as directory:
+            videos = Path(directory) / "videos"
+            videos.mkdir()
+            media_path = videos / "selected.mp4"
+            media_path.write_bytes(b"video")
+            queued = []
+
+            class Queue:
+                async def put(self, job):
+                    queued.append(job)
+
+            runtime = BackendRuntime.__new__(BackendRuntime)
+            runtime.app = SimpleNamespace(queue=Queue(), update_queue_display=AsyncMock())
+            runtime.submit = lambda coroutine: asyncio.run(coroutine)
+
+            with (
+                patch.object(core, "VIDEO_DIRECTORY", videos),
+                patch.dict(core.ACTION_PRESETS, {}, clear=True),
+            ):
+                result = runtime.preview_media("selected.mp4", "")
+
+        self.assertEqual(result["path"], str(media_path.resolve()))
         self.assertEqual(queued[0].file_path, media_path.resolve())
 
     def test_gift_guide_config_is_saved_and_length_limited(self) -> None:
@@ -329,6 +357,36 @@ class TestBackendApi(unittest.TestCase):
             self.assertTrue(rule["active"])
             self.assertEqual(status["active_triggers"][0]["trigger_key"], "@comment:hello")
             self.assertEqual(status["active_gifts"], [])
+
+    def test_validation_ignores_disabled_drafts_but_requires_idle_media(self) -> None:
+        from tiktok_backend import core
+
+        with tempfile.TemporaryDirectory() as directory:
+            videos = Path(directory) / "videos"
+            videos.mkdir()
+            media = videos / "rose.mp4"
+            media.write_bytes(b"video")
+            idle = videos / "idle.mp4"
+            idle.write_bytes(b"video")
+            preset = core.ActionPreset(id="rose_action", name="Rose", videos=["rose.mp4"], sound_filename="")
+            runtime = BackendRuntime.__new__(BackendRuntime)
+            runtime.config = lambda: {"idle_video_path": str(idle)}
+            with (
+                patch.object(core, "VIDEO_DIRECTORY", videos),
+                patch.object(core, "ACTION_PRESETS", {"rose_action": preset}),
+                patch.object(core, "GIFT_MAPPING", {
+                    "rose": ("rose_action", 1, "", "main", 0, True),
+                    "lion": ("rose_action", 1, "", "main", 0, False),
+                }),
+            ):
+                ready = runtime.validate_configuration()
+                runtime.config = lambda: {"idle_video_path": ""}
+                missing_idle = runtime.validate_configuration()
+
+        self.assertTrue(ready["valid"])
+        self.assertEqual(ready["issues"], [])
+        self.assertFalse(missing_idle["valid"])
+        self.assertEqual(missing_idle["issues"][0]["label"], "Video nền")
 
     def test_legacy_direct_media_mapping_migrates_to_action_preset(self) -> None:
         from tiktok_backend import core

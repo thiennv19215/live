@@ -2,7 +2,7 @@
 
 ## React + Electron Control Room (khuyến dùng)
 
-Mở `dist/TikTokLiveStudio.exe`. Electron tự chạy `TikTokLiveBackend.exe` ẩn ở phía sau, vì vậy mọi thao tác cấu hình, test quà, queue và mở output đều nằm trong giao diện React mới. Khi cần nguồn cho TikTok Studio, bấm `Mở output` rồi chọn cửa sổ `TikTok Live Output`.
+Chạy `dist/TikTokLiveStudio_Setup.exe` để cài ứng dụng. Bộ cài tạo shortcut trên Desktop và Start Menu; Electron tự chạy `TikTokLiveBackend.exe` ẩn ở phía sau, vì vậy mọi thao tác cấu hình, test quà, queue và mở output đều nằm trong giao diện React mới. Khi cần nguồn cho TikTok Studio, bấm `Mở output` rồi chọn cửa sổ `TikTok Live Output`.
 
 ### Chạy nhanh ở chế độ dev
 
@@ -34,7 +34,7 @@ Các tỉ lệ hỗ trợ gồm `9:16`, `16:9`, `1:1` và `4:5`. Nhấn `F11` đ
 
 Ứng dụng nhận sự kiện TikTok realtime và phát trực tiếp sang TikTok Studio; OBS là tích hợp tùy chọn.
 
-Trong tab `Sự kiện & lệnh`, người dùng có thể gán hành động cho quà tặng, bình luận chứa từ khóa, follow, share, lượt thích, người xem vào live và đăng ký LIVE. Mỗi luật có công tắc bật/tắt, ưu tiên hàng đợi và cooldown riêng; luật chỉ được đánh dấu `ACTIVE` khi hành động có ít nhất một file video khả dụng.
+Trong tab `Sự kiện & lệnh`, người dùng có thể gán hành động cho quà tặng, bình luận chứa từ khóa, follow, share, lượt thích, người xem vào live và đăng ký LIVE. Mỗi luật có công tắc bật/tắt và cooldown riêng; luật chỉ được đánh dấu `ACTIVE` khi hành động có ít nhất một file video khả dụng. Mọi action được phát FIFO theo đúng thứ tự nhận sự kiện.
 
 ## Tính năng
 - Kết nối TikTok Live & OBS WebSocket v5.
@@ -44,7 +44,7 @@ Trong tab `Sự kiện & lệnh`, người dùng có thể gán hành động ch
 - Hỗ trợ Chế độ Giả lập (Mock Mode) để thử nghiệm offline không cần OBS/TikTok.
 
 ## Hướng dẫn sử dụng
-1. Mở `dist/TikTokLiveStudio.exe`.
+1. Chạy `dist/TikTokLiveStudio_Setup.exe`, hoàn tất trình cài đặt rồi mở ứng dụng từ shortcut.
 2. Ứng dụng Electron sẽ tự khởi động Python backend ở chế độ ẩn.
 
 ## Xuất hình trực tiếp sang TikTok Live Studio
@@ -66,4 +66,4 @@ Chế độ nhiều layer nhân vật (`Idle_Source_N`/`Action_Source_N`) đã �
 
 ## Build bản phát hành
 
-Chạy `./build_exe.ps1` từ PowerShell. Script tự tạo `.build-python`, cài các phiên bản trong `requirements-build.txt`, chạy test Electron và đóng gói backend cùng Control Room.
+Chạy `./build_exe.ps1` từ PowerShell. Script tự tạo `.build-python`, cài các phiên bản trong `requirements-build.txt`, chạy test Electron và đóng gói backend cùng Control Room thành bộ cài NSIS tại `dist/TikTokLiveStudio_Setup.exe`.

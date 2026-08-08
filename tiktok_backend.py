@@ -22,14 +22,11 @@ from tiktok_overlay import LocalOverlayServer
 
 
 def catalog_locked(method: Callable[..., Any]) -> Callable[..., Any]:
-    """Serialize catalog readers and writers served by ThreadingHTTPServer."""
+    """Serialize HTTP catalog work with readers on the TikTok event loop."""
 
     @wraps(method)
     def guarded(self: "BackendRuntime", *args: Any, **kwargs: Any) -> Any:
-        lock = getattr(self, "_catalog_lock", None)
-        if lock is None:
-            lock = self._catalog_lock = threading.RLock()
-        with lock:
+        with core.CATALOG_LOCK:
             return method(self, *args, **kwargs)
 
     return guarded
@@ -60,7 +57,6 @@ class RecentLogHandler(logging.Handler):
 
 class BackendRuntime:
     def __init__(self) -> None:
-        self._catalog_lock = threading.RLock()
         idle_path = core.resolve_existing_media_path(core.get_idle_video_path("main"))
         self.overlay = LocalOverlayServer(idle_path)
         initial_config = core.load_obs_config()
@@ -402,11 +398,7 @@ class BackendRuntime:
         mapping_items: list[dict[str, Any]],
     ) -> dict[str, list[dict[str, Any]]]:
         """Save actions and gift mappings as one logical operation."""
-        lock = getattr(self, "_catalog_lock", None)
-        if lock is None:
-            lock = self._catalog_lock = threading.RLock()
-
-        with lock:
+        with core.CATALOG_LOCK:
             previous_actions = core.ACTION_PRESETS.copy()
             previous_mappings = core.GIFT_MAPPING.copy()
             action_file = core.ACTION_PRESETS_FILE
@@ -440,18 +432,33 @@ class BackendRuntime:
                 "missing_videos": item["missing_videos"],
             }
             for item in mappings
-            if not item["active"]
+            if item["enabled"] and not item["active"]
         ]
         active_count = sum(1 for item in mappings if item["active"])
         warnings: list[str] = []
         if not mappings:
-            warnings.append("Chưa có luật tương tác nào")
-        if mappings and not active_count:
-            warnings.append("Không có luật nào sẵn sàng để nhận sự kiện")
+            issues.append({
+                "trigger_key": "",
+                "label": "Luật tương tác",
+                "reason": "Chưa có luật tương tác nào",
+                "missing_videos": [],
+            })
+        if mappings and not active_count and not issues:
+            issues.append({
+                "trigger_key": "",
+                "label": "Luật tương tác",
+                "reason": "Không có luật nào sẵn sàng để nhận sự kiện",
+                "missing_videos": [],
+            })
         if not self.config().get("idle_video_path"):
-            warnings.append("Chưa có video nền hợp lệ")
+            issues.append({
+                "trigger_key": "",
+                "label": "Video nền",
+                "reason": "Chưa có video nền hợp lệ",
+                "missing_videos": [],
+            })
         return {
-            "valid": not issues and bool(mappings),
+            "valid": not issues,
             "active_count": active_count,
             "inactive_count": len(issues),
             "issues": issues,
@@ -506,10 +513,16 @@ class BackendRuntime:
         repeat_count: int = 1,
         diamonds: int = 0,
         video_index: int | None = None,
-    ) -> None:
+    ) -> bool:
         if not self.app:
             raise RuntimeError("Hệ thống chưa chạy")
-        self.submit(self.app.enqueue_gift(gift, sender=sender, repeat_count=repeat_count, diamonds=diamonds, video_index=video_index))
+        return bool(self.submit(self.app.enqueue_gift(
+            gift,
+            sender=sender,
+            repeat_count=repeat_count,
+            diamonds=diamonds,
+            video_index=video_index,
+        )))
 
     def enqueue_gifts(self, gift: str, count: int, sender: str = "Người xem", diamonds: int = 0) -> int:
         if not self.app:
@@ -517,9 +530,15 @@ class BackendRuntime:
 
         async def enqueue_batch() -> int:
             per_diamond = diamonds // max(1, count)
+            enqueued = 0
             for _ in range(count):
-                await self.app.enqueue_gift(gift, sender=sender, repeat_count=1, diamonds=per_diamond)
-            return count
+                enqueued += int(await self.app.enqueue_gift(
+                    gift,
+                    sender=sender,
+                    repeat_count=1,
+                    diamonds=per_diamond,
+                ))
+            return enqueued
 
         return int(self.submit(enqueue_batch()))
 
@@ -532,7 +551,7 @@ class BackendRuntime:
         if not self.app:
             raise RuntimeError("Hệ thống chưa chạy")
         app = self.app
-        path = core.resolve_existing_media_path(Path(path_value).expanduser().resolve())
+        path = core.resolve_existing_media_path(Path(path_value).expanduser()).resolve()
         if not path.is_file():
             raise FileNotFoundError(path)
 
@@ -576,7 +595,7 @@ class BackendRuntime:
         return count
 
     def set_idle_video(self, path_value: str) -> str:
-        path = Path(path_value).expanduser().resolve()
+        path = core.resolve_existing_media_path(Path(path_value).expanduser()).resolve()
         if not path.is_file():
             raise FileNotFoundError(path)
         core.set_idle_video_path("main", path)
@@ -771,8 +790,13 @@ class BackendRequestHandler(BaseHTTPRequestHandler):
                 diamonds = max(0, int(body.get("diamonds", 0)))
                 v_idx = body.get("videoIndex")
                 video_index = int(v_idx) if v_idx is not None else None
-                runtime.enqueue_gift(str(body.get("gift", "")), sender=sender, repeat_count=count, diamonds=diamonds, video_index=video_index)
-                result = {"ok": True}
+                result = {"ok": runtime.enqueue_gift(
+                    str(body.get("gift", "")),
+                    sender=sender,
+                    repeat_count=count,
+                    diamonds=diamonds,
+                    video_index=video_index,
+                )}
             elif self.path == "/api/queue/test-batch":
                 sender = str(body.get("sender", "")).strip() or "Người xem thử"
                 count = max(1, min(20, int(body.get("count", 1))))

@@ -57,7 +57,7 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         job_med = core.GiftJob("tiktok", Path("3_cho_nhay_tiktok.mp4"), priority=3)
         job_high = core.GiftJob("lion", Path("3_cho_bien_su_tu.mp4"), priority=5)
 
-        queue = core.PriorityGiftQueue()
+        queue = core.FifoPlaybackQueue()
         await queue.put(job_low)
         await queue.put(job_med)
         await queue.put(job_high)
@@ -126,7 +126,7 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         job1 = core.GiftJob("rose", Path("cho_1_sui.mp4"), priority=1)
         job2 = core.GiftJob("lion", Path("3_cho_bien_su_tu.mp4"), priority=5)
 
-        queue = core.PriorityGiftQueue()
+        queue = core.FifoPlaybackQueue()
         await queue.put(job1)
         await queue.put(job2)
         self.assertEqual(len(queue), 2)
@@ -254,8 +254,20 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         """Kiểm tra file đã mất không tạo một job giả khiến người dùng tưởng đang phát."""
         app = core.TikTokObsApp(mock_mode=False)
         with patch.dict(core.GIFT_MAPPING, {"missing_test": ("missing-video.mp4", 1, "", "char1")}):
-            await app.enqueue_gift("missing_test")
+            self.assertFalse(await app.enqueue_gift("missing_test"))
         self.assertEqual(len(app.queue), 0)
+
+    async def test_missing_real_media_is_not_reported_as_matched(self) -> None:
+        app = core.TikTokObsApp(mock_mode=False)
+        with patch.dict(
+            core.GIFT_MAPPING,
+            {"missing_test": ("missing-video.mp4", 1, "", "main", 30, True)},
+            clear=True,
+        ):
+            matched = await app.trigger_tiktok_event("gift", "missing_test")
+        self.assertEqual(matched, 0)
+        self.assertEqual(len(app.queue), 0)
+        self.assertNotIn("missing_test", app._trigger_last_fired)
 
     async def test_all_targets_route_to_shared_sources(self) -> None:
         """Mọi quà đều dùng chung một cặp Idle_Source/Action_Source."""

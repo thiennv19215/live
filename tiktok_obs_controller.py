@@ -29,6 +29,7 @@ import os
 import random
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -65,7 +66,7 @@ from tiktok_media_catalog import (
     select_random_media_reference as select_random_video_filename,
 )
 from tiktok_overlay import LocalOverlayServer
-from tiktok_playback_queue import GiftJob, PriorityGiftQueue
+from tiktok_playback_queue import FifoPlaybackQueue, GiftJob
 
 
 # ============================== Cau hinh ===============================
@@ -82,6 +83,7 @@ APP_DIRECTORY = Path(
     or (Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent)
 ).resolve()
 VIDEO_DIRECTORY = APP_DIRECTORY / "videos"
+CATALOG_LOCK = threading.RLock()
 IDLE_VIDEO_PATH_1 = VIDEO_DIRECTORY / "idle_loop_1.mp4"
 IDLE_VIDEO_PATH_2 = VIDEO_DIRECTORY / "idle_loop_2.mp4"
 IDLE_VIDEO_PATH_3 = VIDEO_DIRECTORY / "idle_loop_3.mp4"
@@ -318,18 +320,23 @@ DEFAULT_GIFT_MAPPING: dict[str, tuple[str, int, str, str]] = {
     "lion": ("action_lion_transform", 5, "", "main"),
 }
 
-def resolve_gift_action_media(mapping_val: str, sound_mapped_val: str = "") -> tuple[list[str], str, str]:
+def resolve_gift_action_media(
+    mapping_val: str,
+    sound_mapped_val: str = "",
+    presets: dict[str, ActionPreset] | None = None,
+) -> tuple[list[str], str, str]:
     """
     Tra cuu tu mapping_val (co the la action_id hoac chuoi video).
     Tra ve: (danh_sach_video_filenames, sound_filename, action_display_name).
     """
     mapping_key = str(mapping_val).strip()
-    if mapping_key in ACTION_PRESETS:
-        preset = ACTION_PRESETS[mapping_key]
+    catalog = ACTION_PRESETS if presets is None else presets
+    if mapping_key in catalog:
+        preset = catalog[mapping_key]
         sound = sound_mapped_val or preset.sound_filename
         return preset.videos, sound, preset.name
 
-    for aid, preset in ACTION_PRESETS.items():
+    for aid, preset in catalog.items():
         if aid.lower() == mapping_key.lower():
             sound = sound_mapped_val or preset.sound_filename
             return preset.videos, sound, preset.name
@@ -1313,7 +1320,7 @@ class TikTokObsApp:
         self.mock_mode = mock_mode
         self.enable_tiktok = enable_tiktok
         self.enable_obs = enable_obs
-        self.queue = PriorityGiftQueue()
+        self.queue = FifoPlaybackQueue()
         self.gift_history: deque[dict[str, Any]] = deque(maxlen=100)
         self.obs = ObsController(mock_mode=mock_mode)
         self.overlay = overlay
@@ -1374,17 +1381,21 @@ class TikTokObsApp:
         now = self.loop_time()
         matched = 0
         rule_matched = False
-        for trigger_key, mapping in list(GIFT_MAPPING.items()):
+        cooldown_blocked = False
+        with CATALOG_LOCK:
+            rules = list(GIFT_MAPPING.items())
+            presets = ACTION_PRESETS.copy()
+        for trigger_key, mapping in rules:
             if not mapping_enabled(mapping) or not trigger_matches(trigger_key, event_type, value, count):
                 continue
             rule_matched = True
             cooldown = mapping_cooldown(mapping)
             last_fired = self._trigger_last_fired.get(trigger_key, 0.0)
             if cooldown and now - last_fired < cooldown:
+                cooldown_blocked = True
                 continue
-            self._trigger_last_fired[trigger_key] = now
             display_name = value if event_type == "gift" else trigger_event_label(event_type, value or parse_trigger_key(trigger_key)[1])
-            await self.enqueue_gift(
+            enqueued = await self.enqueue_gift(
                 trigger_key,
                 sender=sender,
                 repeat_count=count,
@@ -1392,11 +1403,15 @@ class TikTokObsApp:
                 display_name=display_name,
                 event_type=event_type,
                 event_value=value,
+                mapping_override=mapping,
+                action_presets=presets,
             )
-            matched += 1
-        if rule_matched and not matched:
+            if enqueued:
+                self._trigger_last_fired[trigger_key] = now
+                matched += 1
+        if cooldown_blocked and not matched:
             LOGGER.info("Su kien TikTok dang trong cooldown: %s (%s)", event_type, value or "*")
-        elif not matched:
+        elif not rule_matched:
             LOGGER.info("Bo qua su kien TikTok chua map: %s (%s)", event_type, value or "*")
         return matched
 
@@ -1453,12 +1468,20 @@ class TikTokObsApp:
         display_name: str = "",
         event_type: str = "gift",
         event_value: str = "",
-    ) -> None:
+        mapping_override: tuple[Any, ...] | None = None,
+        action_presets: dict[str, ActionPreset] | None = None,
+    ) -> bool:
         """Them gift vao cuoi queue FIFO; khong ngat video dang phat."""
         import time as _time_mod
         gift_key = gift_name.strip().lower()
-        mapping = GIFT_MAPPING.get(gift_key)
-        if mapping is None and gift_name in ACTION_PRESETS:
+        if mapping_override is None or action_presets is None:
+            with CATALOG_LOCK:
+                mapping = GIFT_MAPPING.get(gift_key) if mapping_override is None else mapping_override
+                presets = ACTION_PRESETS.copy() if action_presets is None else action_presets
+        else:
+            mapping = mapping_override
+            presets = action_presets
+        if mapping is None and gift_name in presets:
             action_target = gift_name
             priority = 1
             sound_filename = ""
@@ -1468,11 +1491,11 @@ class TikTokObsApp:
             sound_filename = mapping[2] if len(mapping) > 2 else ""
         else:
             LOGGER.info("Bo qua qua tang chua map: %s", gift_name or "(khong ten)")
-            return
+            return False
 
         target_char = "main"
 
-        video_files, resolved_sound_fn, action_name = resolve_gift_action_media(action_target, sound_filename)
+        video_files, resolved_sound_fn, action_name = resolve_gift_action_media(action_target, sound_filename, presets)
         media_candidates: list[tuple[str, Path]] = []
         for candidate in video_files:
             if not candidate:
@@ -1494,7 +1517,7 @@ class TikTokObsApp:
         else:
             missing_files = ", ".join(str(path) for _, path in media_candidates) or "(chưa cấu hình)"
             LOGGER.error("Không thể phát quà '%s': không tìm thấy file media: %s", gift_name, missing_files)
-            return
+            return False
 
         resolved_sound_path: Path | None = None
         if resolved_sound_fn:
@@ -1538,24 +1561,28 @@ class TikTokObsApp:
         await self.queue.put(job)
         LOGGER.info("⚡ [TRIGGER:%s] %s · %s x%d -> Action [%s]", event_type.upper(), sender, event_label, repeat_count, action_name)
         await self.update_queue_display()
+        return True
 
     async def enqueue_trigger(self, trigger_key: str, sender: str = "Người xem") -> bool:
         key = str(trigger_key).strip().lower()
-        mapping = GIFT_MAPPING.get(key)
+        with CATALOG_LOCK:
+            mapping = GIFT_MAPPING.get(key)
+            presets = ACTION_PRESETS.copy()
         if mapping is None or not mapping_enabled(mapping):
             return False
         event_type, condition = parse_trigger_key(key)
         display_name = condition if event_type == "gift" else trigger_event_label(event_type, condition)
         count = int(condition or "1") if event_type == "like" else 1
-        await self.enqueue_gift(
+        return await self.enqueue_gift(
             key,
             sender=sender,
             repeat_count=count,
             display_name=display_name,
             event_type=event_type,
             event_value=condition,
+            mapping_override=mapping,
+            action_presets=presets,
         )
-        return True
 
     async def enqueue_action_preset(self, preset_id: str, target_char: str = "main") -> bool:
         preset = ACTION_PRESETS.get(preset_id)
@@ -1737,8 +1764,6 @@ class TikTokObsApp:
                 await self._play_job(job)
             except Exception:
                 LOGGER.exception("Loi khi xu ly qua %s", job.gift_name)
-            finally:
-                self.queue.task_done()
             if len(self.queue) and not self._last_job_was_skipped and not self._stop_event.is_set():
                 LOGGER.info("Cho %.1f giay o video nen truoc action tiep theo", QUEUE_ACTION_COOLDOWN)
                 try:

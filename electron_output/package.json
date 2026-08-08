@@ -10,7 +10,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "test": "node --test test/*.test.js",
-    "dist": "npm run build && electron-builder --win portable --x64"
+    "dist": "npm run build && electron-builder --win nsis --x64"
   },
   "dependencies": {
     "lucide-react": "0.468.0",
@@ -42,13 +42,34 @@
       {
         "from": "../dist/TikTokLiveBackend",
         "to": "TikTokLiveBackend"
+      },
+      {
+        "from": "../gift_config.json",
+        "to": "gift_config.json"
+      },
+      {
+        "from": "../action_presets.json",
+        "to": "action_presets.json"
+      },
+      {
+        "from": "../videos",
+        "to": "videos"
       }
     ],
     "win": {
       "target": [
-        "portable"
+        "nsis"
       ],
-      "artifactName": "TikTokLiveStudio_v1.2.0.exe"
+      "artifactName": "TikTokLiveStudio_Setup_v${version}.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "TikTok Live Control Room",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
     }
   },
   "allowScripts": {

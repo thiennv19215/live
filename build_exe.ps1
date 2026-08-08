@@ -26,7 +26,7 @@ Write-Host "Building TikTokLiveBackend.exe..." -ForegroundColor Cyan
     .\tiktok_backend.py
 if ($LASTEXITCODE -ne 0) { throw "TikTokLiveBackend build failed" }
 
-Write-Host "Building single-file TikTokLiveStudio.exe (React + Electron + embedded backend)..." -ForegroundColor Cyan
+Write-Host "Building TikTokLiveStudio Windows installer (React + Electron + embedded backend)..." -ForegroundColor Cyan
 Push-Location ".\electron_output"
 try {
     $dependenciesReady = (
@@ -47,36 +47,19 @@ try {
     Pop-Location
 }
 
-$dataArgs = @()
-if (Test-Path ".\videos") {
-    $dataArgs = @("--add-data", "videos;videos")
+$builtInstaller = ".\electron_output\dist\TikTokLiveStudio_Setup_v1.2.0.exe"
+if (-not (Test-Path -LiteralPath $builtInstaller)) {
+    throw "Installer artifact not found: $builtInstaller"
 }
 
-New-Item -ItemType Directory -Force -Path ".\dist\videos" | Out-Null
-$builtExe = ".\electron_output\dist\TikTokLiveStudio_v1.2.0.exe"
-if (-not (Test-Path $builtExe)) {
-    $builtExe = ".\electron_output\dist\TikTokLiveStudio.exe"
-}
-$versionedExecutable = ".\dist\TikTokLiveStudio_v1.2.0.exe"
-$finalExecutable = ".\dist\TikTokLiveStudio.exe"
-try {
-    Copy-Item $builtExe $versionedExecutable -Force
-    Copy-Item $builtExe $finalExecutable -Force
-} catch [System.IO.IOException] {
-    Write-Host "Existing executable is open; written versioned build to $versionedExecutable" -ForegroundColor Yellow
-}
+$versionedInstaller = ".\dist\TikTokLiveStudio_Setup_v1.2.0.exe"
+$finalInstaller = ".\dist\TikTokLiveStudio_Setup.exe"
+Copy-Item -LiteralPath $builtInstaller -Destination $versionedInstaller -Force
+Copy-Item -LiteralPath $builtInstaller -Destination $finalInstaller -Force
+
+Remove-Item ".\dist\TikTokLiveStudio.exe" -Force -ErrorAction SilentlyContinue
+Remove-Item ".\dist\TikTokLiveStudio_v1.2.0.exe" -Force -ErrorAction SilentlyContinue
 Remove-Item ".\dist\TikTokLiveOutput.exe" -Force -ErrorAction SilentlyContinue
 Remove-Item ".\dist\TikTokLiveBackend" -Recurse -Force -ErrorAction SilentlyContinue
-Write-Host "Copying videos folder..." -ForegroundColor Cyan
-if (Test-Path ".\videos") {
-    Copy-Item ".\videos\*" ".\dist\videos" -Recurse -Force
-} else {
-    Write-Host "No videos folder found. Create dist\videos and copy your MP4 files there." -ForegroundColor Yellow
-}
-foreach ($configFile in @("gift_config.json", "action_presets.json", "obs_config.json")) {
-    if (Test-Path ".\$configFile") {
-        Copy-Item ".\$configFile" ".\dist\$configFile" -Force
-    }
-}
 
-Write-Host "Done: $((Resolve-Path $finalExecutable).Path)" -ForegroundColor Green
+Write-Host "Done: $((Resolve-Path $finalInstaller).Path)" -ForegroundColor Green

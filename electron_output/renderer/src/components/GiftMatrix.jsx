@@ -46,7 +46,7 @@ const actionIdForEvent = (eventType, condition, actions) => {
   return candidate;
 };
 
-export function GiftMatrix({ mappings, setMappings, actions, setActions, post, onNotice, onManageVideos, status }) {
+export function GiftMatrix({ mappings, setMappings, actions, setActions, config, post, onNotice, onManageVideos, status }) {
   const mappingsRef = useRef(mappings);
   const syncRef = useRef({ saving: false, pending: null });
   const [catalog, setCatalog] = useState([]);
@@ -62,6 +62,7 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, o
 
   useEffect(() => { mappingsRef.current = mappings; }, [mappings]);
   useEffect(() => { api.get("/api/gifts").then((result) => setCatalog(result.items || [])).catch(() => {}); }, []);
+  useEffect(() => { setValidation(null); }, [actions, config?.idle_video_path, mappings]);
 
   const flush = async () => {
     const sync = syncRef.current;
@@ -113,7 +114,7 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, o
       setValidation(result);
       onNotice(result.valid
         ? `${result.active_count} luật đã sẵn sàng để LIVE`
-        : `Còn ${result.inactive_count} luật cần xử lý`, result.valid ? "success" : "error");
+        : `Còn ${result.inactive_count} mục cấu hình cần xử lý`, result.valid ? "success" : "error");
     } catch (error) {
       onNotice(`Không kiểm tra được cấu hình: ${error.message}`, "error");
     }
@@ -237,7 +238,7 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, o
       <main className="mapping-list-panel">
         <div className="mapping-list-heading"><div><span>LUẬT TƯƠNG TÁC TIKTOK</span><h2>{mappings.length} quy tắc</h2></div><div className="mapping-heading-actions"><button onClick={validateConfiguration}><CircleAlert size={13} /> Kiểm tra cấu hình</button><span className={`mapping-sync ${syncState}`}>{syncState === "saving" ? <LoaderCircle size={13} className="sync-spinner" /> : syncState === "error" ? <CircleAlert size={13} /> : <Check size={13} />}{syncState === "saving" ? "Đang áp dụng" : syncState === "error" ? "Lỗi đồng bộ" : isLive ? "Đang nhận sự kiện LIVE" : "Đã đồng bộ"}</span></div></div>
         {validation ? <div className={`mapping-validation ${validation.valid ? "valid" : "invalid"}`}>
-          <strong>{validation.valid ? `✓ ${validation.active_count} luật sẵn sàng` : `⚠ ${validation.inactive_count} luật chưa sẵn sàng`}</strong>
+          <strong>{validation.valid ? `✓ ${validation.active_count} luật sẵn sàng` : `⚠ ${validation.inactive_count} mục chưa sẵn sàng`}</strong>
           {validation.issues?.length ? <span>{validation.issues.slice(0, 3).map((item) => `${item.label}: ${item.reason}`).join(" · ")}{validation.issues.length > 3 ? ` · và ${validation.issues.length - 3} luật khác` : ""}</span> : null}
           {validation.warnings?.length ? <span>{validation.warnings.join(" · ")}</span> : null}
         </div> : null}
