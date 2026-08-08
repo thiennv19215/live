@@ -11,6 +11,7 @@ import re
 import threading
 import time
 from collections import deque
+from functools import wraps
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
@@ -18,6 +19,20 @@ from urllib.parse import parse_qs, urlparse
 
 import tiktok_obs_controller as core
 from tiktok_overlay import LocalOverlayServer
+
+
+def catalog_locked(method: Callable[..., Any]) -> Callable[..., Any]:
+    """Serialize catalog readers and writers served by ThreadingHTTPServer."""
+
+    @wraps(method)
+    def guarded(self: "BackendRuntime", *args: Any, **kwargs: Any) -> Any:
+        lock = getattr(self, "_catalog_lock", None)
+        if lock is None:
+            lock = self._catalog_lock = threading.RLock()
+        with lock:
+            return method(self, *args, **kwargs)
+
+    return guarded
 
 
 class RecentLogHandler(logging.Handler):
@@ -80,6 +95,7 @@ class BackendRuntime:
     @staticmethod
     def _serialize_job(job: core.GiftJob) -> dict[str, Any]:
         return {
+            "id": job.history_id,
             "gift": job.gift_name,
             "event_type": getattr(job, "event_type", "gift"),
             "event_value": getattr(job, "event_value", ""),
@@ -177,6 +193,7 @@ class BackendRuntime:
             self.app.client._unique_id = core.TIKTOK_USERNAME
         return self.config()
 
+    @catalog_locked
     def mappings(self) -> list[dict[str, Any]]:
         result = []
         for trigger_key, value in core.GIFT_MAPPING.items():
@@ -273,6 +290,7 @@ class BackendRuntime:
         future = asyncio.run_coroutine_threadsafe(self._refresh_gift_catalog(), self.loop)
         return {"items": future.result(timeout=20), "updated_at": self._gift_catalog_updated_at}
 
+    @catalog_locked
     def actions(self) -> list[dict[str, Any]]:
         result = []
         for preset in core.ACTION_PRESETS.values():
@@ -295,6 +313,7 @@ class BackendRuntime:
         normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
         return normalized or fallback
 
+    @catalog_locked
     def save_actions(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         presets: dict[str, core.ActionPreset] = {}
         for index, item in enumerate(items, start=1):
@@ -315,6 +334,7 @@ class BackendRuntime:
         core.save_action_presets(presets)
         return self.actions()
 
+    @catalog_locked
     def save_mappings(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         mapping: dict[str, tuple[str, int, str, str]] = {}
         migrated_presets = False
@@ -408,6 +428,35 @@ class BackendRuntime:
                     logging.getLogger(__name__).exception("Khong the rollback kho hanh dong")
                 raise
             return {"actions": actions, "mappings": mappings}
+
+    def validate_configuration(self) -> dict[str, Any]:
+        """Return user-facing configuration problems without starting a live session."""
+        mappings = self.mappings()
+        issues = [
+            {
+                "trigger_key": item["trigger_key"],
+                "label": item["event_label"],
+                "reason": item["readiness"],
+                "missing_videos": item["missing_videos"],
+            }
+            for item in mappings
+            if not item["active"]
+        ]
+        active_count = sum(1 for item in mappings if item["active"])
+        warnings: list[str] = []
+        if not mappings:
+            warnings.append("Chưa có luật tương tác nào")
+        if mappings and not active_count:
+            warnings.append("Không có luật nào sẵn sàng để nhận sự kiện")
+        if not self.config().get("idle_video_path"):
+            warnings.append("Chưa có video nền hợp lệ")
+        return {
+            "valid": not issues and bool(mappings),
+            "active_count": active_count,
+            "inactive_count": len(issues),
+            "issues": issues,
+            "warnings": warnings,
+        }
 
     async def _start_app(self, mock_mode: bool, enable_tiktok: bool, enable_obs: bool) -> None:
         if self.app_task and not self.app_task.done():
@@ -694,6 +743,8 @@ class BackendRequestHandler(BaseHTTPRequestHandler):
                 self._json(runtime.actions())
             elif parsed.path == "/api/gifts":
                 self._json(runtime.gift_catalog())
+            elif parsed.path == "/api/validation":
+                self._json(runtime.validate_configuration())
             elif parsed.path == "/api/logs":
                 after = int(parse_qs(parsed.query).get("after", ["0"])[0])
                 self._json(runtime.log_handler.snapshot(after))

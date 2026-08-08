@@ -1,5 +1,5 @@
 import { Clapperboard, Construction, Gift, LayoutDashboard, Minus, RadioTower, Settings, SlidersHorizontal, Square, Video, X } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { GiftMatrix } from "./components/GiftMatrix";
 import { LogsPanel } from "./components/LogsPanel";
 import { MediaLibrary } from "./components/MediaLibrary";
@@ -15,10 +15,19 @@ export default function App() {
   const [notice, setNotice] = useState(null);
   const [activeTab, setActiveTab] = useState("live");
   const [mediaActionId, setMediaActionId] = useState("");
+  const noticeTimer = useRef(null);
 
   const notify = useCallback((message, type = "success") => {
+    if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
     setNotice({ message, type });
-    window.setTimeout(() => setNotice(null), 2800);
+    noticeTimer.current = window.setTimeout(() => {
+      setNotice(null);
+      noticeTimer.current = null;
+    }, 2800);
+  }, []);
+
+  useEffect(() => () => {
+    if (noticeTimer.current) window.clearTimeout(noticeTimer.current);
   }, []);
 
   return (

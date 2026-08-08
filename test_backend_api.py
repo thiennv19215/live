@@ -30,6 +30,9 @@ class FakeRuntime:
     def actions(self):
         return [{"id": "action_rose", "name": "Rose action", "videos": ["rose.mp4"], "sound": ""}]
 
+    def validate_configuration(self):
+        return {"valid": True, "active_count": 1, "inactive_count": 0, "issues": [], "warnings": []}
+
     def start_system(self, payload):
         self.started = payload
 
@@ -124,6 +127,11 @@ class TestBackendApi(unittest.TestCase):
     def test_status_and_logs(self) -> None:
         self.assertFalse(self.get_json("/api/status")["running"])
         self.assertEqual(self.get_json("/api/logs?after=4")[0]["id"], 5)
+
+    def test_configuration_validation_route(self) -> None:
+        result = self.get_json("/api/validation")
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["active_count"], 1)
 
     def test_start_and_queue_actions(self) -> None:
         result = self.post_json("/api/system/start", {"mock_mode": True})

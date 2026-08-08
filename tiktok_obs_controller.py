@@ -29,7 +29,6 @@ import os
 import random
 import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +48,24 @@ from obsws_python import ReqClient
 from obsws_python.error import OBSSDKTimeoutError
 from websocket import WebSocketConnectionClosedException, WebSocketTimeoutException
 
+from tiktok_event_rules import (
+    SUPPORTED_TRIGGER_EVENTS,
+    TRIGGER_EVENT_LABELS,
+    make_trigger_key,
+    mapping_cooldown,
+    mapping_enabled,
+    parse_trigger_key,
+    trigger_action_label,
+    trigger_event_label,
+    trigger_matches,
+)
+from tiktok_media_catalog import (
+    ActionPreset,
+    parse_media_references as parse_video_filenames,
+    select_random_media_reference as select_random_video_filename,
+)
 from tiktok_overlay import LocalOverlayServer
+from tiktok_playback_queue import GiftJob, PriorityGiftQueue
 
 
 # ============================== Cau hinh ===============================
@@ -224,14 +240,6 @@ ACTION_PRESETS_FILE = APP_DIRECTORY / "action_presets.json"
 AUDIO_SOURCE_NAME = "Audio_Action_Source"
 
 
-@dataclass
-class ActionPreset:
-    id: str
-    name: str
-    videos: list[str]
-    sound_filename: str = ""
-
-
 DEFAULT_ACTION_PRESETS: dict[str, dict[str, Any]] = {
     "action_dance_rose": {
         "name": "💃 Nhảy Rose Hot Trend",
@@ -254,23 +262,6 @@ DEFAULT_ACTION_PRESETS: dict[str, dict[str, Any]] = {
         "sound_filename": "",
     },
 }
-
-
-def parse_video_filenames(val: str | list[str] | Any) -> list[str]:
-    """Tach danh sach cac file video tu chuoi (phan cach boi dau phay) hoac list."""
-    if isinstance(val, list):
-        return [str(x).strip() for x in val if str(x).strip()]
-    if isinstance(val, str):
-        return [x.strip() for x in val.split(",") if x.strip()]
-    item = str(val).strip()
-    return [item] if item else []
-
-
-def select_random_video_filename(val: str | list[str] | Any) -> str:
-    """Chon ngau nhien 1 file video tu danh sach cac file media duoc gan cho qua."""
-    files = parse_video_filenames(val)
-    valid_files = [f for f in files if f]
-    return random.choice(valid_files) if valid_files else ""
 
 
 def load_action_presets() -> dict[str, ActionPreset]:
@@ -326,113 +317,6 @@ DEFAULT_GIFT_MAPPING: dict[str, tuple[str, int, str, str]] = {
     "tiktok": ("action_dance_tiktok", 3, "", "main"),
     "lion": ("action_lion_transform", 5, "", "main"),
 }
-
-SUPPORTED_TRIGGER_EVENTS = {"gift", "comment", "follow", "share", "like", "join", "subscribe"}
-TRIGGER_EVENT_LABELS = {
-    "gift": "Quà tặng",
-    "comment": "Bình luận",
-    "follow": "Theo dõi",
-    "share": "Chia sẻ live",
-    "like": "Lượt thích",
-    "join": "Vào phòng live",
-    "subscribe": "Đăng ký LIVE",
-}
-
-
-def make_trigger_key(event_type: str, condition: str = "") -> str:
-    event_name = str(event_type or "gift").strip().lower()
-    if event_name not in SUPPORTED_TRIGGER_EVENTS:
-        raise ValueError(f"Loại sự kiện TikTok không được hỗ trợ: {event_name}")
-    normalized = str(condition).strip().lower()
-    if event_name == "gift":
-        if not normalized:
-            raise ValueError("Quà tặng cần có tên quà")
-        return normalized
-    if event_name == "comment" and not normalized:
-        raise ValueError("Sự kiện bình luận cần có từ khóa")
-    if event_name == "like":
-        try:
-            normalized = str(max(1, int(normalized or "1")))
-        except ValueError as exc:
-            raise ValueError("Ngưỡng lượt thích phải là số") from exc
-    return f"@{event_name}:{normalized or '*'}"
-
-
-def parse_trigger_key(trigger_key: str) -> tuple[str, str]:
-    key = str(trigger_key).strip().lower()
-    if key.startswith("@") and ":" in key:
-        event_type, condition = key[1:].split(":", 1)
-        if event_type in SUPPORTED_TRIGGER_EVENTS:
-            return event_type, "" if condition == "*" else condition
-    return "gift", key
-
-
-def trigger_event_label(event_type: str, condition: str = "") -> str:
-    label = TRIGGER_EVENT_LABELS.get(event_type, event_type.title())
-    if event_type == "gift":
-        return f"Quà: {condition.title()}"
-    if event_type == "comment":
-        return f'Bình luận chứa: "{condition}"'
-    if event_type == "like":
-        return f"Ít nhất {condition or '1'} lượt thích"
-    return label
-
-
-def trigger_action_label(
-    event_type: str,
-    sender: str,
-    event_label: str,
-    count: int = 1,
-    diamonds: int = 0,
-    event_value: str = "",
-) -> str:
-    """Build audience-facing copy for the currently playing TikTok event."""
-    event_name = str(event_type or "gift").strip().lower()
-    viewer = str(sender or "Người xem").strip()
-    label = str(event_label or TRIGGER_EVENT_LABELS.get(event_name, "Sự kiện TikTok")).strip()
-    if event_name == "gift":
-        count_text = f" {max(1, int(count or 1))}x"
-        diamond_text = f" (💎{int(diamonds)})" if int(diamonds or 0) > 0 else ""
-        return f"🎁 {viewer} đã tặng{count_text} {label.title()}{diamond_text}"
-    if event_name == "like":
-        return f"❤️ {viewer} đã thả {max(1, int(count or 1))} lượt thích"
-    if event_name == "comment":
-        content = str(event_value or label).strip()
-        return f"💬 {viewer} đã bình luận: {content}"
-    copy = {
-        "follow": ("➕", "đã theo dõi kênh"),
-        "share": ("↗️", "đã chia sẻ LIVE"),
-        "join": ("👋", "đã vào phòng LIVE"),
-        "subscribe": ("⭐", "đã đăng ký LIVE"),
-    }
-    icon, action = copy.get(event_name, ("⚡", f"đã kích hoạt {label}"))
-    return f"{icon} {viewer} {action}"
-
-
-def trigger_matches(trigger_key: str, event_type: str, value: str = "", count: int = 1) -> bool:
-    rule_type, condition = parse_trigger_key(trigger_key)
-    if rule_type != str(event_type).strip().lower():
-        return False
-    normalized_value = str(value).strip().lower()
-    if rule_type == "gift":
-        return normalized_value == condition
-    if rule_type == "comment":
-        return bool(condition) and condition in normalized_value
-    if rule_type == "like":
-        return int(count or 0) >= int(condition or "1")
-    return True
-
-
-def mapping_cooldown(mapping: tuple[Any, ...]) -> float:
-    try:
-        return max(0.0, float(mapping[4])) if len(mapping) > 4 else 0.0
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def mapping_enabled(mapping: tuple[Any, ...]) -> bool:
-    return bool(mapping[5]) if len(mapping) > 5 else True
-
 
 def resolve_gift_action_media(mapping_val: str, sound_mapped_val: str = "") -> tuple[list[str], str, str]:
     """
@@ -618,62 +502,6 @@ def stop_sound_file() -> None:
             ctypes.windll.winmm.mciSendStringW(f"close {alias}", None, 0, 0)
     except Exception:
         pass
-
-
-@dataclass(frozen=True)
-class GiftJob:
-    gift_name: str
-    file_path: Path
-    priority: int
-    sound_path: Path | None = None
-    target_char: str = "main"
-    sender: str = "Người xem"
-    repeat_count: int = 1
-    diamonds: int = 0
-    timestamp: str = ""
-    event_type: str = "gift"
-    event_value: str = ""
-
-
-
-class PriorityGiftQueue:
-    """Hang doi FIFO: qua den truoc duoc xu ly truoc."""
-
-    def __init__(self) -> None:
-        self._items: deque[GiftJob] = deque()
-        self._condition = asyncio.Condition()
-        self._unfinished_tasks = 0
-
-    async def put(self, job: GiftJob) -> None:
-        async with self._condition:
-            self._items.append(job)
-            self._unfinished_tasks += 1
-            self._condition.notify()
-
-    async def get(self) -> GiftJob:
-        async with self._condition:
-            await self._condition.wait_for(lambda: len(self._items) > 0)
-            return self._items.popleft()
-
-    def task_done(self) -> None:
-        if self._unfinished_tasks > 0:
-            self._unfinished_tasks -= 1
-
-    def clear(self) -> int:
-        count = len(self._items)
-        self._items.clear()
-        self._unfinished_tasks = 0
-        return count
-
-    async def clear_async(self) -> int:
-        async with self._condition:
-            return self.clear()
-
-    def get_items(self) -> list[GiftJob]:
-        return list(self._items)
-
-    def __len__(self) -> int:
-        return len(self._items)
 
 
 def should_enqueue_gift_event(event: GiftEvent) -> bool:
@@ -1509,6 +1337,14 @@ class TikTokObsApp:
         self.client.add_listener(JoinEvent, self.on_join)
         self.client.add_listener(SubNotifyEvent, self.on_subscribe)
 
+    def _set_history_status(self, history_id: str, status: str) -> None:
+        if not history_id:
+            return
+        for item in self.gift_history:
+            if item.get("id") == history_id:
+                item["status"] = status
+                return
+
     async def on_connect(self, _: ConnectEvent) -> None:
         self.is_tiktok_connected = True
         LOGGER.info("Da ket noi TikTok Live: @%s", TIKTOK_USERNAME)
@@ -1683,8 +1519,8 @@ class TikTokObsApp:
             timestamp=timestamp,
             event_type=event_type,
             event_value=event_value,
+            history_id=job_id,
         )
-        await self.queue.put(job)
         self.gift_history.appendleft({
             "id": job_id,
             "gift": event_label,
@@ -1699,6 +1535,7 @@ class TikTokObsApp:
             "timestamp": timestamp,
             "status": "queued",
         })
+        await self.queue.put(job)
         LOGGER.info("⚡ [TRIGGER:%s] %s · %s x%d -> Action [%s]", event_type.upper(), sender, event_label, repeat_count, action_name)
         await self.update_queue_display()
 
@@ -1773,7 +1610,9 @@ class TikTokObsApp:
 
     async def clear_all_playback(self) -> int:
         """Clear pending jobs and wait until the current action returns to idle."""
-        cleared = await self.queue.clear_async()
+        pending_jobs = await self.queue.drain_async()
+        for job in pending_jobs:
+            self._set_history_status(job.history_id, "skipped")
         had_current = self.current_job is not None
         self.skip_current()
         if had_current:
@@ -1781,7 +1620,7 @@ class TikTokObsApp:
                 await asyncio.wait_for(self._wait_until_idle(), timeout=2.0)
             except asyncio.TimeoutError:
                 LOGGER.warning("Action hien tai chua dung xong sau khi xoa hang doi")
-        return cleared + int(had_current)
+        return len(pending_jobs) + int(had_current)
 
     async def _wait_until_idle(self) -> None:
         while self.current_job is not None:
@@ -1790,11 +1629,13 @@ class TikTokObsApp:
     async def _play_job(self, job: GiftJob) -> None:
         interrupt = asyncio.Event()
         obs_playing = False
+        outcome = "completed"
         self._last_job_was_skipped = False
         self._current_interrupt = interrupt
         self.current_job = job
         self.current_job_start_time = asyncio.get_event_loop().time()
         self.current_job_duration = ACTION_DEFAULT_DURATION
+        self._set_history_status(job.history_id, "playing")
         # Start probing in parallel so playback and Skip react immediately.
         # ffprobe can be slow on first launch in a packaged Windows app.
         duration_task = asyncio.create_task(asyncio.to_thread(get_video_duration, job.file_path))
@@ -1834,6 +1675,7 @@ class TikTokObsApp:
             )
             if interrupt_task in metadata_done:
                 self._last_job_was_skipped = True
+                outcome = "skipped"
                 LOGGER.info("Video %s da bi bo qua theo yeu cau nguoi dung", job.gift_name)
                 return
 
@@ -1856,8 +1698,16 @@ class TikTokObsApp:
                     await task
             if interrupt_task in done:
                 self._last_job_was_skipped = True
+                outcome = "skipped"
                 LOGGER.info("Video %s da bi bo qua theo yeu cau nguoi dung", job.gift_name)
+        except asyncio.CancelledError:
+            outcome = "skipped"
+            raise
+        except Exception:
+            outcome = "failed"
+            raise
         finally:
+            self._set_history_status(job.history_id, outcome)
             for task in (duration_task, interrupt_task):
                 if not task.done():
                     task.cancel()
@@ -1883,7 +1733,7 @@ class TikTokObsApp:
         while not self._stop_event.is_set():
             job = await self.queue.get()
             try:
-                LOGGER.info("Dang phat qua %s (priority=%s)", job.gift_name, job.priority)
+                LOGGER.info("Dang phat theo FIFO: %s", job.gift_name)
                 await self._play_job(job)
             except Exception:
                 LOGGER.exception("Loi khi xu ly qua %s", job.gift_name)

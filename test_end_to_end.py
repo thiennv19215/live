@@ -135,6 +135,38 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cleared_count, 2)
         self.assertEqual(len(queue), 0)
 
+    async def test_history_tracks_completed_playback(self) -> None:
+        worker = asyncio.create_task(self.app.worker())
+        try:
+            with patch.object(core, "get_video_duration", return_value=0.01):
+                await self.app.enqueue_gift("rose", sender="Alice")
+                for _ in range(200):
+                    if self.app.gift_history and self.app.gift_history[0]["status"] == "completed":
+                        break
+                    await asyncio.sleep(0.01)
+            self.assertEqual(self.app.gift_history[0]["status"], "completed")
+        finally:
+            worker.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await worker
+
+    async def test_clear_marks_current_and_pending_history_as_skipped(self) -> None:
+        worker = asyncio.create_task(self.app.worker())
+        try:
+            with patch.object(core, "get_video_duration", return_value=30.0):
+                await self.app.enqueue_gift("rose", sender="First")
+                await self.app.enqueue_gift("rose", sender="Second")
+                for _ in range(100):
+                    if self.app.current_job is not None and len(self.app.queue) == 1:
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertEqual(await self.app.clear_all_playback(), 2)
+            self.assertEqual({item["status"] for item in self.app.gift_history}, {"skipped"})
+        finally:
+            worker.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await worker
+
     async def test_clear_all_stops_current_action_and_returns_to_idle(self) -> None:
         class Overlay:
             def __init__(self) -> None:

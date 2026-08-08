@@ -272,7 +272,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .quick-simulator .field { display: block; margin-top: 8px; }
 .quick-simulator input { width: 100%; padding: 8px; border: 1px solid #3a3154; border-radius: 6px; color: #f5efff; background: #100d1b; font-size: 11px; }
 .simulator-number-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
-.simulator-media { display: grid; grid-template-columns: 1.4fr .7fr .8fr .45fr; gap: 5px; margin: 9px 0; }
+.simulator-media { display: grid; grid-template-columns: 1.5fr .7fr .8fr; gap: 5px; margin: 9px 0; }
 .simulator-media span { padding: 6px; overflow: hidden; border-radius: 5px; background: #211a34; color: #aca2be; text-align: center; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
 .simulate-button { width: 100%; min-height: 36px; border: 0; border-radius: 7px; background: linear-gradient(100deg, var(--cyan), var(--violet)); color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 11px; font-weight: 800; }
 .source-card { padding: 14px; }
@@ -407,7 +407,6 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .status-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 12px; font-size: 9px; font-weight: 800; letter-spacing: 0.03em; }
 .active-pill { background: rgba(255, 0, 127, 0.25); color: #ff4da6; border: 1px solid rgba(255, 0, 127, 0.5); animation: pulse-pink 1.5s ease-in-out infinite; }
 .pending-pill { background: rgba(255, 255, 255, 0.06); color: #948aa8; }
-.priority-tag { font-size: 9px; color: var(--amber); background: rgba(255, 190, 85, 0.1); padding: 1px 5px; border-radius: 4px; }
 
 @keyframes pulse-pink {
   50% { box-shadow: 0 0 10px rgba(255, 0, 127, 0.4); }
@@ -604,3 +603,14 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   .automation-workspace .live-sync-strip { order: 2; }
   .automation-workspace .mapping-list { order: 2; min-height: 220px; }
 }
+
+/* Configuration readiness and simplified FIFO media controls. */
+.mapping-heading-actions { display: flex; align-items: center; gap: 6px; }
+.mapping-heading-actions > button { display: flex; align-items: center; gap: 4px; padding: 5px 7px; border: 1px solid #365b78; border-radius: 5px; background: #102d47; color: #bdefff; cursor: pointer; font-size: 8px; font-weight: 800; }
+.mapping-validation { display: grid; gap: 3px; margin: 0 0 8px; padding: 7px 9px; border: 1px solid rgba(244, 207, 114, .35); border-radius: 6px; background: rgba(244, 207, 114, .08); color: #ffe8a8; font-size: 8px; }
+.mapping-validation.valid { border-color: rgba(83, 230, 170, .35); background: rgba(83, 230, 170, .08); color: #b9f5d8; }
+.mapping-validation span { line-height: 1.4; }
+.mapping-copy em { display: block; margin-top: 3px; overflow: hidden; color: #ff9ca9; text-overflow: ellipsis; white-space: nowrap; font-size: 7px; font-style: normal; font-weight: 800; }
+.mapping-copy em.ready { color: #70e6b2; }
+.action-video-name { display: block; overflow: hidden; color: #e9f8ff; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.action-video-fields > small { display: block; margin-top: 4px; color: #86a4bc; font-size: 8px; font-weight: 700; }

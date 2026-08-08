@@ -13,9 +13,9 @@ Phiên bản hiện tại là hệ thống **nhận tương tác TikTok → kh�
 - Ánh xạ từng loại tương tác thành một hoặc nhiều video hành động.
 - Đặt từ khóa cho bình luận, ngưỡng cho like và cooldown riêng cho từng luật.
 - Gán âm thanh riêng cho từng hành động.
-- Chọn ngẫu nhiên một video khi hành động được gán nhiều video.
+- Luân phiên các video theo thứ tự khi một hành động được gán nhiều video.
 - Bỏ qua những sự kiện chưa được cấu hình hoặc luật đã tắt.
-- Đưa action vào hàng đợi theo priority và thứ tự nhận sự kiện.
+- Đưa action vào hàng đợi FIFO theo đúng thứ tự nhận sự kiện.
 - Phát nội dung qua cửa sổ output, Browser Overlay và OBS tùy chọn.
 
 Handler TikTok đăng ký các loại sự kiện:
@@ -69,7 +69,10 @@ Tên người xem, số lần lặp, diamond, loại sự kiện và giá trị 
 
 ## Các file chính
 
-- `tiktok_obs_controller.py`: kết nối TikTok, nhận quà, quản lý queue và phát action.
+- `tiktok_obs_controller.py`: kết nối TikTok, nhận quà và điều phối phát action.
+- `tiktok_event_rules.py`: chuẩn hóa và so khớp luật sự kiện.
+- `tiktok_playback_queue.py`: model job và hàng đợi FIFO.
+- `tiktok_media_catalog.py`: model hành động và helper danh sách media.
 - `tiktok_backend.py`: API cho giao diện Electron.
 - `tiktok_overlay.py`: Browser Overlay phát video và âm thanh.
 - `electron_output/renderer/src/App.jsx`: bố cục giao diện chính.

@@ -2,21 +2,17 @@ import { FolderPlus, Play, PlaySquare, Trash2, Video, Volume2, VolumeX } from "l
 import { useEffect, useMemo, useState } from "react";
 
 const STORAGE_KEY = "tiktok-live-action-videos-v3";
-const META_KEY = "tiktok-live-action-video-meta-v1";
 const fileName = (path = "") => path.split(/[\\/]/).at(-1) || path;
 const normalizedPath = (path = "") => path.replaceAll("\\", "/").toLowerCase();
 const load = (key, fallback) => { try { return JSON.parse(window.localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } };
 
 export function MediaLibrary({ config, setConfig, actions, setActions, post, onNotice, targetActionId, onTargetActionChange }) {
   const [savedPaths, setSavedPaths] = useState(() => load(STORAGE_KEY, []));
-  const [meta, setMeta] = useState(() => load(META_KEY, {}));
   const selectedActionId = targetActionId || actions?.[0]?.id || "";
 
   useEffect(() => { if (!targetActionId && actions?.length) onTargetActionChange?.(actions[0].id); }, [actions, onTargetActionChange, targetActionId]);
   const paths = useMemo(() => [...new Set([...savedPaths, ...(actions || []).flatMap((action) => action.videos || [])].filter(Boolean))], [actions, savedPaths]);
   const selectedAction = actions?.find((action) => action.id === selectedActionId);
-  const saveMeta = (next) => { setMeta(next); window.localStorage.setItem(META_KEY, JSON.stringify(next)); };
-  const updateMeta = (path, patch) => saveMeta({ ...meta, [normalizedPath(path)]: { name: fileName(path), priority: 1, volume: 1, timeout: 30, ...meta[normalizedPath(path)], ...patch } });
 
   const addVideos = async () => {
     const selected = await window.desktop?.pickMedia?.({ title: "Thêm video hành động", multiple: true, copyToLibrary: true });
@@ -101,16 +97,11 @@ export function MediaLibrary({ config, setConfig, actions, setActions, post, onN
       <button className="video-dropzone" onClick={addVideos}>Kéo video vào đây hoặc bấm “Thêm video”</button>
       <div className="action-video-list">
         {paths.map((path) => {
-          const info = { name: fileName(path), priority: 1, volume: 1, timeout: 30, ...meta[normalizedPath(path)] };
           return <article className="action-video-row" key={path}>
             <div className="action-video-thumb"><PlaySquare size={24} /></div>
             <div className="action-video-fields">
-              <label className="video-name-field"><small>Tên</small><input value={info.name} onChange={(event) => updateMeta(path, { name: event.target.value })} /></label>
-              <div className="video-settings-row">
-                <label><small>Ưu tiên</small><input type="number" min="1" max="5" value={info.priority} onChange={(event) => updateMeta(path, { priority: Number(event.target.value) })} /></label>
-                <label><small>Âm lượng</small><input type="number" min="0" max="1" step="0.1" value={info.volume} onChange={(event) => updateMeta(path, { volume: Number(event.target.value) })} /></label>
-                <label><small>Timeout (giây)</small><input type="number" min="1" value={info.timeout} onChange={(event) => updateMeta(path, { timeout: Number(event.target.value) })} /></label>
-              </div>
+              <strong className="action-video-name">{fileName(path)}</strong>
+              <small>Video được phát đủ thời lượng gốc và theo đúng thứ tự sự kiện nhận được.</small>
               <span className="action-video-path" title={path}>{path}</span>
             </div>
             <div className="action-video-buttons">

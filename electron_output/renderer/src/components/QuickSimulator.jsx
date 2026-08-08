@@ -177,7 +177,6 @@ export function QuickSimulator({ mappings, status, post, onNotice }) {
         <span>{selectedTrigger?.event_label || "Chưa chọn sự kiện"}</span>
         <span title={selected?.action}>{selectedTrigger?.video_count || 0} video</span>
         <span title={selected?.sound}>{selected?.sound ? "Có audio" : "Không audio"}</span>
-        <span>P{selected?.priority || 1}</span>
       </div>
       <button className="simulate-button" disabled={!triggerKey} onClick={() => trigger()}><Play size={15} fill="currentColor" /> Phát lại sự kiện đã chọn</button>
     </section>

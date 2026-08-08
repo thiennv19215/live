@@ -58,6 +58,7 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, o
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [syncState, setSyncState] = useState("ready");
   const [videoPickerOpen, setVideoPickerOpen] = useState(false);
+  const [validation, setValidation] = useState(null);
 
   useEffect(() => { mappingsRef.current = mappings; }, [mappings]);
   useEffect(() => { api.get("/api/gifts").then((result) => setCatalog(result.items || [])).catch(() => {}); }, []);
@@ -103,6 +104,18 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, o
       onNotice(error.message, "error");
     } finally {
       setCatalogLoading(false);
+    }
+  };
+
+  const validateConfiguration = async () => {
+    try {
+      const result = await api.get("/api/validation");
+      setValidation(result);
+      onNotice(result.valid
+        ? `${result.active_count} luật đã sẵn sàng để LIVE`
+        : `Còn ${result.inactive_count} luật cần xử lý`, result.valid ? "success" : "error");
+    } catch (error) {
+      onNotice(`Không kiểm tra được cấu hình: ${error.message}`, "error");
     }
   };
 
@@ -157,7 +170,7 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, o
       action: actionId,
       action_id: actionId,
       action_name: actionName,
-      priority: existingMapping?.priority || 1,
+      priority: 1,
       cooldown_seconds: existingMapping?.cooldown_seconds || 0,
       enabled: existingMapping?.enabled !== false,
       videos: nextVideos,
@@ -222,7 +235,12 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, o
       </aside>
 
       <main className="mapping-list-panel">
-        <div className="mapping-list-heading"><div><span>LUẬT TƯƠNG TÁC TIKTOK</span><h2>{mappings.length} quy tắc</h2></div><span className={`mapping-sync ${syncState}`}>{syncState === "saving" ? <LoaderCircle size={13} className="sync-spinner" /> : syncState === "error" ? <CircleAlert size={13} /> : <Check size={13} />}{syncState === "saving" ? "Đang áp dụng" : syncState === "error" ? "Lỗi đồng bộ" : isLive ? "Đang nhận sự kiện LIVE" : "Đã đồng bộ"}</span></div>
+        <div className="mapping-list-heading"><div><span>LUẬT TƯƠNG TÁC TIKTOK</span><h2>{mappings.length} quy tắc</h2></div><div className="mapping-heading-actions"><button onClick={validateConfiguration}><CircleAlert size={13} /> Kiểm tra cấu hình</button><span className={`mapping-sync ${syncState}`}>{syncState === "saving" ? <LoaderCircle size={13} className="sync-spinner" /> : syncState === "error" ? <CircleAlert size={13} /> : <Check size={13} />}{syncState === "saving" ? "Đang áp dụng" : syncState === "error" ? "Lỗi đồng bộ" : isLive ? "Đang nhận sự kiện LIVE" : "Đã đồng bộ"}</span></div></div>
+        {validation ? <div className={`mapping-validation ${validation.valid ? "valid" : "invalid"}`}>
+          <strong>{validation.valid ? `✓ ${validation.active_count} luật sẵn sàng` : `⚠ ${validation.inactive_count} luật chưa sẵn sàng`}</strong>
+          {validation.issues?.length ? <span>{validation.issues.slice(0, 3).map((item) => `${item.label}: ${item.reason}`).join(" · ")}{validation.issues.length > 3 ? ` · và ${validation.issues.length - 3} luật khác` : ""}</span> : null}
+          {validation.warnings?.length ? <span>{validation.warnings.join(" · ")}</span> : null}
+        </div> : null}
         <div className="interaction-summary">
           {EVENT_TYPES.map((type) => <span key={type.id}><b>{type.icon}</b>{mappings.filter((item) => (item.event_type || "gift") === type.id).length} {type.shortLabel}</span>)}
         </div>
@@ -238,8 +256,8 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, o
             return <article className={`compact-mapping-row event-${itemEventType}`} key={item.trigger_key || `${key}-${index}`}>
               <label className="mapping-toggle"><input type="checkbox" checked={item.enabled !== false} onChange={(event) => updateMapping(index, { enabled: event.target.checked })} /><i /></label>
               <div className="mapping-gift-icon">{gift?.image_url ? <img src={gift.image_url} alt="" /> : gift?.emoji || definition.icon}</div>
-              <div className="mapping-copy"><strong>{label}</strong><small>→ {action?.name || item.action_name || "Chưa chọn hành động"} · ưu tiên {item.priority || 1}{item.cooldown_seconds ? ` · nghỉ ${item.cooldown_seconds}s` : ""}{gift ? ` · 💎 ${gift.diamonds || "—"}` : ""}</small></div>
-              <button className="row-test" disabled={!item.active} onClick={() => post("/api/triggers/test", { trigger_key: item.trigger_key || item.gift })}><Play size={13} fill="currentColor" /> Thử</button>
+              <div className="mapping-copy"><strong>{label}</strong><small>→ {action?.name || item.action_name || "Chưa chọn hành động"}{item.cooldown_seconds ? ` · nghỉ ${item.cooldown_seconds}s` : ""}{gift ? ` · 💎 ${gift.diamonds || "—"}` : ""}</small><em className={item.active ? "ready" : "blocked"}>{item.readiness || (item.active ? "Sẵn sàng" : "Chưa sẵn sàng")}</em></div>
+              <button className="row-test" disabled={!item.active} title={item.active ? "Phát thử luật này" : item.readiness} onClick={() => post("/api/triggers/test", { trigger_key: item.trigger_key || item.gift })}><Play size={13} fill="currentColor" /> Thử</button>
               <button className="row-delete" onClick={() => removeMapping(index)} title="Xóa quy tắc"><Trash2 size={14} /></button>
             </article>;
           })}

@@ -7,7 +7,6 @@ export function QueuePanel({ status, post }) {
   const items = status.current ? [status.current, ...status.queue] : status.queue;
   const historyItems = status.gift_history || [];
   const totalCount = status.queue_total ?? items.length;
-  const pendingCount = status.queue_pending ?? status.queue.length;
 
   return (
     <section className="queue-panel">
@@ -88,7 +87,6 @@ export function QueuePanel({ status, post }) {
                     ) : (
                       <span className="status-pill pending-pill">Chờ phát</span>
                     )}
-                    <b className="priority-tag">P{item.priority ?? 1}</b>
                   </div>
                 </div>
               );
@@ -112,7 +110,11 @@ export function QueuePanel({ status, post }) {
               const giftName = item.gift || "Sự kiện TikTok";
               const count = item.count || 1;
               const diamonds = item.diamonds || 0;
-              const isCurrent = status.current && status.current.gift === item.gift && status.current.sender === item.sender;
+              const isCurrent = Boolean(status.current && (
+                (item.id && status.current.id === item.id)
+                || (!item.id && status.current.gift === item.gift && status.current.sender === item.sender)
+              ));
+              const lifecycle = isCurrent ? "playing" : (item.status || "completed");
               return (
                 <div className={`queue-row history-row ${isCurrent ? "active" : ""}`} key={item.id || index}>
                   <span className="queue-index">{String(index + 1).padStart(2, "0")}</span>
@@ -136,10 +138,16 @@ export function QueuePanel({ status, post }) {
                     </div>
                   </div>
                   <div className="queue-row-tags">
-                    {isCurrent ? (
+                    {lifecycle === "playing" ? (
                       <span className="status-pill active-pill"><PlayCircle size={12} /> ĐANG PHÁT</span>
+                    ) : lifecycle === "queued" ? (
+                      <span className="status-pill pending-pill"><Clock size={12} /> CHỜ PHÁT</span>
+                    ) : lifecycle === "skipped" ? (
+                      <span className="status-pill pending-pill"><Trash2 size={12} /> ĐÃ BỎ QUA</span>
+                    ) : lifecycle === "failed" ? (
+                      <span className="status-pill pending-pill"><Trash2 size={12} /> PHÁT LỖI</span>
                     ) : (
-                      <span className="status-pill done-pill"><CheckCircle2 size={12} /> Đã nhận</span>
+                      <span className="status-pill done-pill"><CheckCircle2 size={12} /> HOÀN TẤT</span>
                     )}
                   </div>
                 </div>
