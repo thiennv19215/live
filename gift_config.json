@@ -13,17 +13,6 @@
       "enabled": true
     },
     {
-      "gift_name": "doughnut",
-      "event_type": "gift",
-      "condition": "doughnut",
-      "action_id": "gift_doughnut",
-      "priority": 2,
-      "sound_override": "",
-      "target": "main",
-      "cooldown_seconds": 0.0,
-      "enabled": true
-    },
-    {
       "gift_name": "tiktok",
       "event_type": "gift",
       "condition": "tiktok",

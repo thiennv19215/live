@@ -3,47 +3,66 @@
   "actions": {
     "action_dance_rose": {
       "name": "💃 Nhảy Rose Hot Trend",
-      "videos": ["cho_1_sui.png"],
+      "videos": [
+        "cho_1_sui.png"
+      ],
       "sound_filename": ""
     },
     "action_funny_doughnut": {
       "name": "🍩 Ăn Mừng Vui Nhộn",
-      "videos": ["cho_2_trong_chuoi.png"],
+      "videos": [
+        "cho_2_trong_chuoi.png"
+      ],
       "sound_filename": ""
     },
     "action_dance_tiktok": {
       "name": "♪ Nhảy TikTok Sôi Động",
-      "videos": ["Three_cats_dancing_on_green_202608051521.mp4"],
+      "videos": [
+        "Three_cats_dancing_on_green_202608051521.mp4"
+      ],
       "sound_filename": ""
     },
     "action_lion_transform": {
       "name": "🦁 Biến Hình Sư Tử",
-      "videos": ["ide1.mp4"],
+      "videos": [
+        "ide1.mp4"
+      ],
       "sound_filename": ""
     },
     "gift_rose": {
-      "name": "Custom Video",
-      "videos": ["cho_1_sui.png"],
+      "name": "Quà: Rose Action",
+      "videos": [
+        "cho_1_sui.png",
+        "Meo den .mp4"
+      ],
       "sound_filename": ""
     },
     "gift_doughnut": {
       "name": "Custom Video",
-      "videos": ["cho_2_trong_chuoi.png"],
+      "videos": [
+        "cho_2_trong_chuoi.png"
+      ],
       "sound_filename": ""
     },
     "gift_tiktok": {
       "name": "Custom Video",
-      "videos": ["Three_cats_dancing_on_green_202608051521.mp4"],
+      "videos": [
+        "Three_cats_dancing_on_green_202608051521.mp4"
+      ],
       "sound_filename": ""
     },
     "gift_lion": {
       "name": "Custom Video",
-      "videos": ["Meo den .mp4"],
+      "videos": [
+        "Meo den .mp4"
+      ],
       "sound_filename": ""
     },
     "gift_gg": {
       "name": "mèo trắng .mp4",
-      "videos": ["mèo trắng .mp4"],
+      "videos": [
+        "mèo trắng .mp4"
+      ],
       "sound_filename": ""
     }
   }
