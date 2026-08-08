@@ -2,26 +2,33 @@
 
 ## Tổng quan
 
-Phiên bản hiện tại là hệ thống **nhận quà TikTok → xếp hàng → phát video và âm thanh**. Ứng dụng đã hỗ trợ khá đầy đủ việc vận hành nội dung theo quà tặng, nhưng chưa hỗ trợ các tương tác sâu hơn như bình luận, like, follow hoặc trả lời người xem.
+Phiên bản hiện tại là hệ thống **nhận tương tác TikTok → khớp luật → xếp hàng → phát video và âm thanh**. Ngoài quà tặng, ứng dụng hỗ trợ bình luận theo từ khóa, follow, share, like theo ngưỡng, người xem vào phòng và đăng ký LIVE.
 
 ## Tương tác TikTok đã hỗ trợ
 
 - Kết nối vào phòng live bằng TikTok username.
 - Theo dõi trạng thái kết nối và tự thử kết nối lại khi mất kết nối.
-- Nhận sự kiện quà tặng theo thời gian thực.
+- Nhận sự kiện quà tặng, bình luận, follow, share, like, join và subscribe theo thời gian thực.
 - Với quà dạng streak, chỉ tạo action khi chuỗi quà kết thúc để tránh phát lặp từng nhịp.
-- Ánh xạ tên quà thành một hoặc nhiều video hành động.
-- Gán âm thanh riêng cho từng quà.
-- Chọn ngẫu nhiên một video khi quà được gán nhiều video.
-- Bỏ qua những quà chưa được cấu hình.
-- Đưa action vào hàng đợi FIFO: quà đến trước được phát trước.
+- Ánh xạ từng loại tương tác thành một hoặc nhiều video hành động.
+- Đặt từ khóa cho bình luận, ngưỡng cho like và cooldown riêng cho từng luật.
+- Gán âm thanh riêng cho từng hành động.
+- Chọn ngẫu nhiên một video khi hành động được gán nhiều video.
+- Bỏ qua những sự kiện chưa được cấu hình hoặc luật đã tắt.
+- Đưa action vào hàng đợi theo priority và thứ tự nhận sự kiện.
 - Phát nội dung qua cửa sổ output, Browser Overlay và OBS tùy chọn.
 
-Handler TikTok hiện chỉ đăng ký ba loại sự kiện:
+Handler TikTok đăng ký các loại sự kiện:
 
 - `ConnectEvent`
 - `DisconnectEvent`
 - `GiftEvent`
+- `CommentEvent`
+- `FollowEvent`
+- `ShareEvent`
+- `LikeEvent`
+- `JoinEvent`
+- `SubNotifyEvent`
 
 ## Thao tác dành cho người vận hành
 
@@ -29,9 +36,9 @@ Handler TikTok hiện chỉ đăng ký ba loại sự kiện:
 - Chọn TikTok trực tiếp hoặc chế độ giả lập offline.
 - Bật/tắt đồng bộ OBS.
 - Nhập TikTok username và cấu hình OBS WebSocket.
-- Thêm, sửa và xóa mapping quà.
-- Gán nhiều video và một file audio cho mỗi quà.
-- Phát thử quà trong preview, lặp tối đa 20 lần.
+- Thêm, bật/tắt và xóa luật tương tác TikTok.
+- Gán video cho quà, follow, like, share, bình luận, join và subscribe.
+- Phát thử từng luật tương tác trong preview.
 - Chọn video nền và quản lý thư viện video.
 - Xem action đang phát, tiến trình và thời gian còn lại.
 - Bỏ qua action hiện tại hoặc xóa hàng đợi.
@@ -43,38 +50,22 @@ Handler TikTok hiện chỉ đăng ký ba loại sự kiện:
 
 ## Chưa được hỗ trợ
 
-- Nhận hoặc xử lý bình luận/chat.
-- Trigger theo từ khóa trong bình luận.
-- Like hoặc tổng số like.
-- Follow mới.
-- Share live.
-- Subscribe.
-- Sự kiện người xem vào hoặc rời phòng.
+- Sự kiện người xem rời phòng.
 - Poll hoặc vote.
 - Gửi tin nhắn hay phản hồi trực tiếp cho người xem.
-- Hiển thị tên người tặng trên output.
-- Phân biệt người gửi quà.
-- Lưu số lượng quà hoặc tổng diamond thực tế.
+- Hiển thị tên người tương tác dưới dạng chữ trên output.
 - Trigger theo username hoặc cấp độ người xem.
 
 ## Lưu ý kỹ thuật
 
-### Tên người xem và diamond chưa được sử dụng
-
-Giao diện giả lập có ô nhập tên người xem và diamond, nhưng request backend hiện chỉ sử dụng trường `gift`. Vì vậy hai giá trị này chưa được lưu vào job, hàng đợi hoặc output.
-
-### Priority chưa ảnh hưởng thứ tự phát
-
-Mỗi mapping có trường `priority`, nhưng hàng đợi hiện dùng `append` và `popleft`. Do đó đây vẫn là FIFO thuần túy; quà có priority cao không được phát trước.
+Tên người xem, số lần lặp, diamond, loại sự kiện và giá trị sự kiện được lưu trong job và lịch sử. Với like, `LikeEvent.count` được so với ngưỡng của luật; với bình luận, nội dung được so khớp không phân biệt hoa thường.
 
 ## Hướng mở rộng đề xuất
 
-1. Truyền metadata người tặng, số lượng và diamond vào `GiftJob`.
-2. Hiển thị tên người tặng và thông tin quà trên overlay.
-3. Bổ sung `CommentEvent` và hệ thống lệnh chat.
-4. Bổ sung trigger cho like, follow, share và subscribe.
-5. Xác định rõ priority chỉ dùng để hiển thị hay phải thay đổi thứ tự queue.
-6. Lưu lịch sử sự kiện để thống kê người tương tác và tổng giá trị quà.
+1. Hiển thị tên người tương tác và thông tin sự kiện trên overlay.
+2. Bổ sung trigger theo username hoặc cấp độ người xem.
+3. Bổ sung thống kê riêng cho từng loại tương tác.
+4. Bổ sung poll/vote và sự kiện rời phòng nếu TikTok cung cấp ổn định.
 
 ## Các file chính
 
@@ -82,6 +73,6 @@ Mỗi mapping có trường `priority`, nhưng hàng đợi hiện dùng `append
 - `tiktok_backend.py`: API cho giao diện Electron.
 - `tiktok_overlay.py`: Browser Overlay phát video và âm thanh.
 - `electron_output/renderer/src/App.jsx`: bố cục giao diện chính.
-- `electron_output/renderer/src/components/GiftMatrix.jsx`: cấu hình mapping quà.
-- `electron_output/renderer/src/components/QuickSimulator.jsx`: giả lập sự kiện quà.
+- `electron_output/renderer/src/components/GiftMatrix.jsx`: cấu hình luật tương tác TikTok.
+- `electron_output/renderer/src/components/QuickSimulator.jsx`: giả lập các loại sự kiện.
 - `electron_output/renderer/src/components/OutputStage.jsx`: preview và điều khiển output.

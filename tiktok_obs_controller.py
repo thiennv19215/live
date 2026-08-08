@@ -378,6 +378,37 @@ def trigger_event_label(event_type: str, condition: str = "") -> str:
     return label
 
 
+def trigger_action_label(
+    event_type: str,
+    sender: str,
+    event_label: str,
+    count: int = 1,
+    diamonds: int = 0,
+    event_value: str = "",
+) -> str:
+    """Build audience-facing copy for the currently playing TikTok event."""
+    event_name = str(event_type or "gift").strip().lower()
+    viewer = str(sender or "Người xem").strip()
+    label = str(event_label or TRIGGER_EVENT_LABELS.get(event_name, "Sự kiện TikTok")).strip()
+    if event_name == "gift":
+        count_text = f" {max(1, int(count or 1))}x"
+        diamond_text = f" (💎{int(diamonds)})" if int(diamonds or 0) > 0 else ""
+        return f"🎁 {viewer} đã tặng{count_text} {label.title()}{diamond_text}"
+    if event_name == "like":
+        return f"❤️ {viewer} đã thả {max(1, int(count or 1))} lượt thích"
+    if event_name == "comment":
+        content = str(event_value or label).strip()
+        return f"💬 {viewer} đã bình luận: {content}"
+    copy = {
+        "follow": ("➕", "đã theo dõi kênh"),
+        "share": ("↗️", "đã chia sẻ LIVE"),
+        "join": ("👋", "đã vào phòng LIVE"),
+        "subscribe": ("⭐", "đã đăng ký LIVE"),
+    }
+    icon, action = copy.get(event_name, ("⚡", f"đã kích hoạt {label}"))
+    return f"{icon} {viewer} {action}"
+
+
 def trigger_matches(trigger_key: str, event_type: str, value: str = "", count: int = 1) -> bool:
     rule_type, condition = parse_trigger_key(trigger_key)
     if rule_type != str(event_type).strip().lower():
@@ -1775,9 +1806,14 @@ class TikTokObsApp:
             if self.overlay:
                 next_jobs = self.queue.get_items()
                 next_path = next_jobs[0].file_path if next_jobs else None
-                count_str = f" {job.repeat_count}x" if job.repeat_count > 1 else " 1x"
-                diamond_str = f" (💎{job.diamonds})" if job.diamonds > 0 else ""
-                label_text = f"🎁 {job.sender} đã tặng{count_str} {job.gift_name.title()}{diamond_str}"
+                label_text = trigger_action_label(
+                    job.event_type,
+                    job.sender,
+                    job.gift_name,
+                    count=job.repeat_count,
+                    diamonds=job.diamonds,
+                    event_value=job.event_value,
+                )
                 if next_path:
                     self.overlay.show_action(job.file_path, sound_path=job.sound_path, label=label_text, preload_path=next_path)
                 else:

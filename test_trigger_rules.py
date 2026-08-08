@@ -19,6 +19,21 @@ class TestTriggerRuleHelpers(unittest.TestCase):
         self.assertTrue(core.trigger_matches("@like:10", "like", count=10))
         self.assertFalse(core.trigger_matches("@like:10", "like", count=9))
 
+    def test_action_labels_use_copy_for_each_event_type(self) -> None:
+        self.assertEqual(core.trigger_action_label("follow", "Alice", "Theo dõi"), "➕ Alice đã theo dõi kênh")
+        self.assertEqual(core.trigger_action_label("share", "Alice", "Chia sẻ"), "↗️ Alice đã chia sẻ LIVE")
+        self.assertEqual(core.trigger_action_label("like", "Alice", "Like", count=3), "❤️ Alice đã thả 3 lượt thích")
+        self.assertEqual(core.trigger_action_label("join", "Alice", "Vào phòng"), "👋 Alice đã vào phòng LIVE")
+        self.assertEqual(core.trigger_action_label("subscribe", "Alice", "Đăng ký"), "⭐ Alice đã đăng ký LIVE")
+        self.assertEqual(
+            core.trigger_action_label("comment", "Alice", "Bình luận", event_value="xin chào"),
+            "💬 Alice đã bình luận: xin chào",
+        )
+        self.assertEqual(
+            core.trigger_action_label("gift", "Alice", "rose", count=2, diamonds=2),
+            "🎁 Alice đã tặng 2x Rose (💎2)",
+        )
+
     def test_trigger_rule_metadata_is_persisted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "gift_config.json"

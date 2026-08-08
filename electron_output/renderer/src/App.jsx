@@ -41,7 +41,7 @@ export default function App() {
           ["live", "Live", LayoutDashboard],
           ["media", "Video hành động", Video],
           ["stage", "Sân khấu", Clapperboard, "Đang phát triển"],
-          ["actions", "Quà & lệnh", Gift],
+          ["actions", "Tương tác TikTok", Gift],
           ["settings", "Cài đặt", Settings],
         ].map(([id, label, Icon, badge]) => (
           <button className={activeTab === id ? "active" : ""} onClick={() => setActiveTab(id)} key={id}>

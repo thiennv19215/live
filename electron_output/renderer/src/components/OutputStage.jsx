@@ -16,6 +16,19 @@ const FILL_MODES = {
   cover: { label: "Phủ kín khung" },
 };
 
+const currentEventCopy = (current) => {
+  const eventType = current?.event_type || "gift";
+  const count = Math.max(1, Number(current?.count) || 1);
+  if (eventType === "gift") return { icon: "🎁", text: "đã tặng", label: current.gift, showCount: true };
+  if (eventType === "like") return { icon: "❤️", text: `đã thả ${count} lượt thích` };
+  if (eventType === "comment") return { icon: "💬", text: "đã bình luận", label: current.event_value || current.gift };
+  if (eventType === "follow") return { icon: "➕", text: "đã theo dõi kênh" };
+  if (eventType === "share") return { icon: "↗️", text: "đã chia sẻ LIVE" };
+  if (eventType === "join") return { icon: "👋", text: "đã vào phòng LIVE" };
+  if (eventType === "subscribe") return { icon: "⭐", text: "đã đăng ký LIVE" };
+  return { icon: "⚡", text: "đã kích hoạt", label: current.gift };
+};
+
 const giftGuideParams = (config, mappings) => {
   const position = config?.gift_panel_position || {};
   const params = new URLSearchParams({
@@ -223,6 +236,7 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
 
   const frameStyle = { aspectRatio: `${width} / ${height}`, "--preview-zoom": 1 };
   const current = status.current;
+  const currentCopy = current ? currentEventCopy(current) : null;
 
   return (
     <section className={`output-stage ${showLibrary ? "with-library" : "preview-only"}`}>
@@ -233,10 +247,10 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
             {current ? (
               <>
                 <span className="live-gift-highlight">
-                  🎁 <strong>{current.sender || "Người xem"}</strong> đã tặng{" "}
-                  <b className="gift-name-tag">{current.gift}</b>
-                  {current.count > 1 ? <span className="gift-count-tag"> x{current.count}</span> : null}
-                  {current.diamonds > 0 ? <span className="gift-diamond-tag"> (💎{current.diamonds})</span> : null}
+                  {currentCopy.icon} <strong>{current.sender || "Người xem"}</strong> {currentCopy.text}{" "}
+                  {currentCopy.label ? <b className="gift-name-tag">{currentCopy.label}</b> : null}
+                  {currentCopy.showCount && current.count > 1 ? <span className="gift-count-tag"> x{current.count}</span> : null}
+                  {currentCopy.showCount && current.diamonds > 0 ? <span className="gift-diamond-tag"> (💎{current.diamonds})</span> : null}
                 </span>
               </>
             ) : (
