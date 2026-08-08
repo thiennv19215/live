@@ -59,6 +59,8 @@ class BackendRuntime:
         self.loop_thread.start()
         self.app: core.TikTokObsApp | None = None
         self.app_task: asyncio.Task[None] | None = None
+        self._gift_catalog: list[dict[str, Any]] = []
+        self._gift_catalog_updated_at = 0.0
         self.started_at = 0.0
         self.log_handler = RecentLogHandler()
         self.log_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s", "%H:%M:%S"))
@@ -169,6 +171,54 @@ class BackendRuntime:
                 }
             )
         return result
+
+    @staticmethod
+    def _gift_catalog_items(payload: Any) -> list[dict[str, Any]]:
+        """Normalise TikTok's gift-list response for the renderer."""
+        candidates = payload.get("gifts", []) if isinstance(payload, dict) else []
+        if not isinstance(candidates, list):
+            candidates = []
+        items: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for gift in candidates:
+            if not isinstance(gift, dict):
+                continue
+            name = str(gift.get("name") or gift.get("gift_name") or "").strip()
+            if not name:
+                continue
+            key = name.lower()
+            if key in seen:
+                continue
+            image = gift.get("image") or gift.get("icon") or {}
+            urls = image.get("url_list", []) if isinstance(image, dict) else []
+            image_url = next((str(url) for url in urls if url), "") if isinstance(urls, list) else ""
+            seen.add(key)
+            items.append({
+                "id": str(gift.get("id") or gift.get("gift_id") or key),
+                "name": name,
+                "key": key,
+                "diamonds": int(gift.get("diamond_count") or 0),
+                "image_url": image_url,
+            })
+        return sorted(items, key=lambda item: (item["diamonds"], item["name"].lower()))
+
+    async def _refresh_gift_catalog(self) -> list[dict[str, Any]]:
+        if not self.app or not self.app.is_tiktok_connected:
+            raise RuntimeError("Hãy kết nối TikTok trực tiếp trước khi tải danh sách quà")
+        payload = await self.app.client._web.fetch_gift_list()
+        items = self._gift_catalog_items(payload)
+        if not items:
+            raise RuntimeError("TikTok không trả về danh sách quà cho room hiện tại")
+        self._gift_catalog = items
+        self._gift_catalog_updated_at = time.time()
+        return items
+
+    def gift_catalog(self) -> dict[str, Any]:
+        return {"items": self._gift_catalog, "updated_at": self._gift_catalog_updated_at}
+
+    def refresh_gift_catalog(self) -> dict[str, Any]:
+        future = asyncio.run_coroutine_threadsafe(self._refresh_gift_catalog(), self.loop)
+        return {"items": future.result(timeout=20), "updated_at": self._gift_catalog_updated_at}
 
     def actions(self) -> list[dict[str, Any]]:
         result = []
@@ -402,6 +452,22 @@ class BackendRuntime:
             self.submit(self.app.obs.set_idle_video(path, "main"))
         return str(path)
 
+    def clear_idle_video(self) -> str:
+        """Remove the configured idle media and blank every live output."""
+        unassigned_path = core.VIDEO_DIRECTORY / "__unassigned_idle_1__.mp4"
+        core.set_idle_video_path("main", unassigned_path)
+        self.overlay.set_idle_path(None)
+
+        config = core.load_obs_config()
+        config.pop("idle_video_path", None)
+        config.pop("idle_video_path_1", None)
+        config["idle_video_paths"] = {}
+        core.save_obs_config(config)
+
+        if self.app and self.app.enable_obs and self.app.obs.is_connected:
+            self.submit(self.app.obs.clear_idle_video("main"))
+        return ""
+
     def status(self) -> dict[str, Any]:
         app = self.app
         configured_mappings = self.mappings()
@@ -523,6 +589,8 @@ class BackendRequestHandler(BaseHTTPRequestHandler):
                 self._json(runtime.mappings())
             elif parsed.path == "/api/actions":
                 self._json(runtime.actions())
+            elif parsed.path == "/api/gifts":
+                self._json(runtime.gift_catalog())
             elif parsed.path == "/api/logs":
                 after = int(parse_qs(parsed.query).get("after", ["0"])[0])
                 self._json(runtime.log_handler.snapshot(after))
@@ -584,8 +652,12 @@ class BackendRequestHandler(BaseHTTPRequestHandler):
                 if not isinstance(actions, list) or not isinstance(mappings, list):
                     raise ValueError("actions and mappings must be lists")
                 result = runtime.save_catalog(actions, mappings)
+            elif self.path == "/api/gifts/refresh":
+                result = runtime.refresh_gift_catalog()
             elif self.path == "/api/media/idle":
                 result = {"path": runtime.set_idle_video(str(body.get("path", "")))}
+            elif self.path == "/api/media/idle/clear":
+                result = {"path": runtime.clear_idle_video()}
             elif self.path == "/api/shutdown":
                 result = {"ok": True}
                 threading.Thread(target=self.server.shutdown, daemon=True).start()

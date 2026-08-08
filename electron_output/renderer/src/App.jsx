@@ -1,4 +1,4 @@
-import { Clapperboard, Gift, LayoutDashboard, Minus, RadioTower, Settings, SlidersHorizontal, Square, X, Zap } from "lucide-react";
+import { Clapperboard, Construction, Gift, LayoutDashboard, Minus, RadioTower, Settings, SlidersHorizontal, Square, Video, X } from "lucide-react";
 import { useCallback, useState } from "react";
 import { GiftMatrix } from "./components/GiftMatrix";
 import { LogsPanel } from "./components/LogsPanel";
@@ -14,6 +14,7 @@ export default function App() {
   const backend = useBackend();
   const [notice, setNotice] = useState(null);
   const [activeTab, setActiveTab] = useState("live");
+  const [mediaActionId, setMediaActionId] = useState("");
 
   const notify = useCallback((message, type = "success") => {
     setNotice({ message, type });
@@ -38,13 +39,13 @@ export default function App() {
       <nav className="top-navigation">
         {[
           ["live", "Live", LayoutDashboard],
-          ["stage", "Sân khấu", Clapperboard],
-          ["actions", "Hành động", Zap],
-          ["gifts", "Sự kiện & lệnh", Gift],
-          ["settings", "Thiết bị & cài đặt", Settings],
-        ].map(([id, label, Icon]) => (
+          ["media", "Video hành động", Video],
+          ["stage", "Sân khấu", Clapperboard, "Đang phát triển"],
+          ["actions", "Quà & lệnh", Gift],
+          ["settings", "Cài đặt", Settings],
+        ].map(([id, label, Icon, badge]) => (
           <button className={activeTab === id ? "active" : ""} onClick={() => setActiveTab(id)} key={id}>
-            <Icon size={15} /> {label}
+            <Icon size={15} /> <span>{label}</span>{badge ? <small>{badge}</small> : null}
           </button>
         ))}
       </nav>
@@ -64,12 +65,20 @@ export default function App() {
           </div>
         ) : null}
 
-        {activeTab === "stage" ? <div className="stage-management-grid"><MediaLibrary {...backend} onNotice={notify} /><OutputStage {...backend} showLibrary={false} onNotice={notify} /></div> : null}
+        {activeTab === "media" ? <div className="media-library-workspace"><MediaLibrary {...backend} onNotice={notify} targetActionId={mediaActionId} onTargetActionChange={setMediaActionId} /></div> : null}
 
-        {activeTab === "actions" || activeTab === "gifts" ? (
-          <div className="management-grid">
-            <GiftMatrix {...backend} onNotice={notify} />
-            <div className="management-side"><QuickSimulator {...backend} onNotice={notify} /><QueuePanel status={backend.status} post={backend.post} /></div>
+        {activeTab === "stage" ? (
+          <section className="stage-coming-soon">
+            <div className="coming-soon-icon"><Construction size={34} /></div>
+            <span>SÂN KHẤU</span>
+            <h2>Đang phát triển</h2>
+            <p>Khu vực dàn dựng sân khấu sẽ được mở trong phiên bản tiếp theo.</p>
+          </section>
+        ) : null}
+
+        {activeTab === "actions" ? (
+          <div className="automation-workspace">
+            <GiftMatrix {...backend} onNotice={notify} onManageVideos={(actionId) => { setMediaActionId(actionId); setActiveTab("media"); }} />
           </div>
         ) : null}
 

@@ -1,32 +1,60 @@
 {
-  "rose": [
-    "C:\\Users\\nguye\\Downloads\\trang3.mp4",
-    1,
-    "",
-    "main"
-  ],
-  "doughnut": [
-    "C:\\Users\\nguye\\Downloads\\vang.mp4",
-    2,
-    "",
-    "main"
-  ],
-  "perfume": [
-    "C:\\Users\\nguye\\Downloads\\active1.mp4",
-    2,
-    "",
-    "main"
-  ],
-  "tiktok": [
-    "C:\\Users\\nguye\\Downloads\\active1.mp4",
-    3,
-    "",
-    "main"
-  ],
-  "lion": [
-    "3_cho_bien_su_tu.mp4",
-    5,
-    "",
-    "main"
+  "version": 3,
+  "mappings": [
+    {
+      "gift_name": "rose",
+      "event_type": "gift",
+      "condition": "rose",
+      "action_id": "gift_rose",
+      "priority": 1,
+      "sound_override": "",
+      "target": "main",
+      "cooldown_seconds": 0.0,
+      "enabled": true
+    },
+    {
+      "gift_name": "doughnut",
+      "event_type": "gift",
+      "condition": "doughnut",
+      "action_id": "gift_doughnut",
+      "priority": 2,
+      "sound_override": "",
+      "target": "main",
+      "cooldown_seconds": 0.0,
+      "enabled": true
+    },
+    {
+      "gift_name": "tiktok",
+      "event_type": "gift",
+      "condition": "tiktok",
+      "action_id": "gift_tiktok",
+      "priority": 3,
+      "sound_override": "",
+      "target": "main",
+      "cooldown_seconds": 0.0,
+      "enabled": true
+    },
+    {
+      "gift_name": "lion",
+      "event_type": "gift",
+      "condition": "lion",
+      "action_id": "gift_lion",
+      "priority": 5,
+      "sound_override": "",
+      "target": "main",
+      "cooldown_seconds": 0.0,
+      "enabled": true
+    },
+    {
+      "gift_name": "congratulations",
+      "event_type": "gift",
+      "condition": "congratulations",
+      "action_id": "action_dance_rose",
+      "priority": 1,
+      "sound_override": "",
+      "target": "main",
+      "cooldown_seconds": 0.0,
+      "enabled": true
+    }
   ]
 }

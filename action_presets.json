@@ -1,0 +1,50 @@
+{
+  "version": 2,
+  "actions": {
+    "action_dance_rose": {
+      "name": "💃 Nhảy Rose Hot Trend",
+      "videos": [],
+      "sound_filename": ""
+    },
+    "action_funny_doughnut": {
+      "name": "🍩 Ăn Mừng Vui Nhộn",
+      "videos": [],
+      "sound_filename": ""
+    },
+    "action_dance_tiktok": {
+      "name": "♪ Nhảy TikTok Sôi Động",
+      "videos": [],
+      "sound_filename": ""
+    },
+    "action_lion_transform": {
+      "name": "🦁 Biến Hình Sư Tử",
+      "videos": [],
+      "sound_filename": ""
+    },
+    "gift_rose": {
+      "name": "Custom Video",
+      "videos": [],
+      "sound_filename": ""
+    },
+    "gift_doughnut": {
+      "name": "Custom Video",
+      "videos": [],
+      "sound_filename": ""
+    },
+    "gift_tiktok": {
+      "name": "Custom Video",
+      "videos": [],
+      "sound_filename": ""
+    },
+    "gift_lion": {
+      "name": "Custom Video",
+      "videos": [],
+      "sound_filename": ""
+    },
+    "gift_gg": {
+      "name": "mèo trắng .mp4",
+      "videos": [],
+      "sound_filename": ""
+    }
+  }
+}

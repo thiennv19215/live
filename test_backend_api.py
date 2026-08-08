@@ -79,6 +79,10 @@ class FakeRuntime:
     def set_idle_video(self, path):
         return path
 
+    def clear_idle_video(self):
+        self.idle_cleared = True
+        return ""
+
 
 class TestBackendApi(unittest.TestCase):
     def setUp(self) -> None:
@@ -128,6 +132,11 @@ class TestBackendApi(unittest.TestCase):
         items = [{"id": "action_lion", "name": "Lion", "videos": ["lion.mp4"], "sound": ""}]
         self.assertEqual(self.post_json("/api/actions", {"items": items}), items)
         self.assertEqual(self.runtime.saved_actions, items)
+
+    def test_idle_video_can_be_cleared(self) -> None:
+        result = self.post_json("/api/media/idle/clear", {})
+        self.assertEqual(result, {"path": ""})
+        self.assertTrue(self.runtime.idle_cleared)
 
     def test_catalog_save_updates_actions_and_mappings_together(self) -> None:
         actions = [{"id": "action_lion", "name": "Lion", "videos": ["lion.mp4"], "sound": ""}]
