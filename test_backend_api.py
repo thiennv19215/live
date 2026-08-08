@@ -1,10 +1,11 @@
+import asyncio
 import json
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -83,6 +84,15 @@ class FakeRuntime:
         self.idle_cleared = True
         return ""
 
+    def set_background_music(self, path):
+        self.background_music_path = path
+        return {"background_music_path": path, "background_music_muted": False}
+
+    def preview_media(self, path, action_id=""):
+        self.preview_path = path
+        self.preview_action_id = action_id
+        return {"path": path, "action_id": action_id}
+
 
 class TestBackendApi(unittest.TestCase):
     def setUp(self) -> None:
@@ -137,6 +147,78 @@ class TestBackendApi(unittest.TestCase):
         result = self.post_json("/api/media/idle/clear", {})
         self.assertEqual(result, {"path": ""})
         self.assertTrue(self.runtime.idle_cleared)
+
+    def test_background_music_can_be_selected(self) -> None:
+        result = self.post_json("/api/media/background", {"path": "C:/Music/song.mp3"})
+        self.assertEqual(result["background_music_path"], "C:/Music/song.mp3")
+        self.assertEqual(self.runtime.background_music_path, "C:/Music/song.mp3")
+
+    def test_specific_media_file_can_be_previewed(self) -> None:
+        result = self.post_json("/api/media/preview", {"path": "C:/Videos/cat.mp4", "action_id": "dance"})
+        self.assertEqual(result, {"path": "C:/Videos/cat.mp4", "action_id": "dance"})
+        self.assertEqual(self.runtime.preview_path, "C:/Videos/cat.mp4")
+
+    def test_preview_media_runtime_enqueues_the_exact_selected_file(self) -> None:
+        from tiktok_backend import BackendRuntime, core
+
+        with tempfile.TemporaryDirectory() as directory:
+            media_path = Path(directory) / "selected.mp4"
+            media_path.write_bytes(b"video")
+            queued = []
+
+            class Queue:
+                async def put(self, job):
+                    queued.append(job)
+
+            runtime = BackendRuntime.__new__(BackendRuntime)
+            runtime.app = SimpleNamespace(queue=Queue(), update_queue_display=AsyncMock())
+            runtime.submit = lambda coroutine: asyncio.run(coroutine)
+
+            with patch.dict(core.ACTION_PRESETS, {}, clear=True):
+                result = runtime.preview_media(str(media_path), "")
+
+        self.assertEqual(result["path"], str(media_path.resolve()))
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0].file_path, media_path.resolve())
+
+    def test_gift_guide_config_is_saved_and_length_limited(self) -> None:
+        from tiktok_backend import BackendRuntime, core
+
+        base_config = {
+            "tiktok_username": "mock_user",
+            "obs_host": "127.0.0.1",
+            "obs_port": 4455,
+            "obs_password": "",
+            "scene_name": "Main Scene",
+            "idle_source_name": "Idle_Source",
+            "action_source_name": "Action_Source",
+            "output_ratio": "9:16",
+        }
+        runtime = BackendRuntime.__new__(BackendRuntime)
+        runtime.app = None
+        with (
+            patch.object(core, "load_obs_config", return_value=base_config.copy()),
+            patch.object(core, "save_obs_config", side_effect=lambda config: base_config.update(config)) as save_config,
+            patch.object(core, "get_idle_video_path", return_value=Path("missing.mp4")),
+            patch.object(core, "resolve_existing_media_path", return_value=Path("missing.mp4")),
+        ):
+            result = runtime.update_config({
+                "gift_guide_enabled": True,
+                "gift_guide_title": "T" * 100,
+                "gift_guide_message": "M" * 200,
+                "gift_panel_position": {"x": 150, "y": -9},
+                "background_music_muted": True,
+                "idle_video_muted": True,
+            })
+
+        saved = save_config.call_args.args[0]
+        self.assertTrue(saved["gift_guide_enabled"])
+        self.assertEqual(len(saved["gift_guide_title"]), 80)
+        self.assertEqual(len(saved["gift_guide_message"]), 160)
+        self.assertEqual(saved["gift_panel_position"], {"x": 95, "y": 0})
+        self.assertTrue(saved["background_music_muted"])
+        self.assertTrue(saved["idle_video_muted"])
+        self.assertTrue(result["gift_guide_enabled"])
 
     def test_catalog_save_updates_actions_and_mappings_together(self) -> None:
         actions = [{"id": "action_lion", "name": "Lion", "videos": ["lion.mp4"], "sound": ""}]

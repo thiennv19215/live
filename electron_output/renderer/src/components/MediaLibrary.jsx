@@ -1,4 +1,4 @@
-import { FolderPlus, Play, PlaySquare, Trash2, Video } from "lucide-react";
+import { FolderPlus, Play, PlaySquare, Trash2, Video, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 const STORAGE_KEY = "tiktok-live-action-videos-v3";
@@ -55,7 +55,7 @@ export function MediaLibrary({ config, setConfig, actions, setActions, post, onN
 
   const preview = async (path) => {
     if (!selectedActionId) return onNotice("Chưa có hành động để phát thử", "error");
-    await post("/api/queue/test", { gift: selectedActionId, sender: "Phát thử video" });
+    await post("/api/media/preview", { path, action_id: selectedActionId });
     onNotice(`Đang phát thử ${fileName(path)}`);
   };
 
@@ -76,6 +76,17 @@ export function MediaLibrary({ config, setConfig, actions, setActions, post, onN
       onNotice("Đã xóa và dừng video nền");
     } catch (error) {
       onNotice(`Không thể xóa video nền: ${error.message}`, "error");
+    }
+  };
+
+  const toggleIdleVideoMute = async () => {
+    try {
+      const next = { ...config, idle_video_muted: !config?.idle_video_muted };
+      const saved = await post("/api/config", next);
+      setConfig(saved);
+      onNotice(saved.idle_video_muted ? "Đã tắt âm thanh video nền" : "Đã bật âm thanh video nền");
+    } catch (error) {
+      onNotice(`Không thể đổi âm thanh video nền: ${error.message}`, "error");
     }
   };
 
@@ -102,7 +113,12 @@ export function MediaLibrary({ config, setConfig, actions, setActions, post, onN
               </div>
               <span className="action-video-path" title={path}>{path}</span>
             </div>
-            <div className="action-video-buttons"><button className={normalizedPath(path) === normalizedPath(config?.idle_video_path) ? "idle active" : "idle"} onClick={() => setIdle(path)}>{normalizedPath(path) === normalizedPath(config?.idle_video_path) ? "Đang là nền" : "Đặt nền"}</button><button onClick={() => preview(path)}><Play size={13} fill="currentColor" /> Phát thử</button><button className="delete" onClick={() => remove(path)}><Trash2 size={13} /> Xóa</button></div>
+            <div className="action-video-buttons">
+              <button className={normalizedPath(path) === normalizedPath(config?.idle_video_path) ? "idle active" : "idle"} onClick={() => setIdle(path)}>{normalizedPath(path) === normalizedPath(config?.idle_video_path) ? "Đang là nền" : "Đặt nền"}</button>
+              {normalizedPath(path) === normalizedPath(config?.idle_video_path) ? <button className={config?.idle_video_muted ? "video-muted active" : "video-muted"} onClick={toggleIdleVideoMute}>{config?.idle_video_muted ? <VolumeX size={13} /> : <Volume2 size={13} />}{config?.idle_video_muted ? "Bật âm nền" : "Tắt âm nền"}</button> : null}
+              <button onClick={() => preview(path)}><Play size={13} fill="currentColor" /> Phát thử</button>
+              <button className="delete" onClick={() => remove(path)}><Trash2 size={13} /> Xóa</button>
+            </div>
           </article>;
         })}
         {!paths.length ? <div className="action-video-empty"><Video size={32} /><strong>Chưa có video hành động</strong><span>Thêm video để bắt đầu cấu hình hiệu ứng live.</span></div> : null}

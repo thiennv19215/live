@@ -11,6 +11,17 @@ const COMMON_GIFTS = [
 ].map(([key, emoji, name, diamonds]) => ({ id: key, key, emoji, name, diamonds }));
 
 const fileCount = (action) => action?.available_video_count ?? action?.videos?.length ?? 0;
+const actionIdForGift = (giftKey, actions) => {
+  const slug = String(giftKey || "action").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "action";
+  const base = `gift_${slug}`;
+  let candidate = base;
+  let suffix = 2;
+  while (actions.some((action) => action.id === candidate)) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+};
 
 export function GiftMatrix({ mappings, setMappings, actions, setActions, post, onNotice, onManageVideos, status }) {
   const mappingsRef = useRef(mappings);
@@ -70,19 +81,49 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, o
     }
   };
 
-  const addMapping = (gift = selectedGift) => {
+  const assignToLive = async (gift = selectedGift) => {
     if (!gift) return onNotice("Hãy chọn một quà TikTok", "error");
     if (!selectedVideoPath) return onNotice("Hãy chọn video hành động trước", "error");
-    if (mappings.some((item) => (item.event_type || "gift") === "gift" && (item.condition || item.gift) === gift.key)) {
-      return onNotice(`${gift.name} đã có trong mapping`);
+    const existingIndex = mappings.findIndex((item) => (item.event_type || "gift") === "gift" && (item.condition || item.gift) === gift.key);
+    const existingMapping = existingIndex >= 0 ? mappings[existingIndex] : null;
+    const existingActionId = existingMapping?.action_id || existingMapping?.action || "";
+    const existingAction = actions.find((action) => action.id === existingActionId);
+    const actionId = existingAction?.id || actionIdForGift(gift.key, actions);
+    const nextVideos = [...new Set([...(existingAction?.videos || []).filter(Boolean), selectedVideoPath])];
+    const actionName = existingAction?.name && existingAction.name !== "Custom Video"
+      ? existingAction.name
+      : `${gift.name} Action`;
+    const nextActions = existingAction
+      ? actions.map((action) => action.id === actionId ? { ...action, name: actionName, videos: nextVideos } : action)
+      : [...actions, { id: actionId, name: actionName, videos: nextVideos, sound: existingMapping?.sound || "" }];
+    const mapping = {
+      ...(existingMapping || {}),
+      gift: gift.key,
+      trigger_key: gift.key,
+      event_type: "gift",
+      condition: gift.key,
+      action: actionId,
+      action_id: actionId,
+      action_name: actionName,
+      priority: existingMapping?.priority || 1,
+      cooldown_seconds: existingMapping?.cooldown_seconds || 0,
+      enabled: existingMapping?.enabled !== false,
+      videos: nextVideos,
+      sound: existingMapping?.sound || "",
+    };
+    const nextMappings = existingMapping
+      ? mappings.map((item, index) => index === existingIndex ? mapping : item)
+      : [...mappings, mapping];
+    try {
+      const saved = await post("/api/catalog", { actions: nextActions, mappings: nextMappings });
+      setActions(saved.actions);
+      mappingsRef.current = saved.mappings;
+      setMappings(saved.mappings);
+      setSelectedVideoPath("");
+      onNotice(existingMapping ? `Đã cập nhật video cho ${gift.name}` : `Đã thêm ${gift.name} vào live`);
+    } catch (error) {
+      onNotice(`Không thể gán video: ${error.message}`, "error");
     }
-    changeMappings((current) => [...current, {
-      gift: gift.key, trigger_key: gift.key, event_type: "gift", condition: gift.key,
-      action: selectedVideoPath, action_id: "", action_name: selectedVideoPath.split(/[\\/]/).at(-1),
-      priority: 1, cooldown_seconds: 0, enabled: true, videos: [selectedVideoPath], sound: "",
-    }]);
-    setSelectedGift(gift);
-    onNotice(`Đã thêm ${gift.name} vào danh sách mapping`);
   };
 
   const assignVideo = (path) => {
@@ -95,7 +136,10 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, o
   const updateMapping = (index, patch) => changeMappings((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
   const source = catalog.length ? catalog : COMMON_GIFTS;
   const visibleGifts = source.filter((gift) => gift.name.toLowerCase().includes(search.trim().toLowerCase()));
-  const managedVideos = [...new Set([...actions.flatMap((action) => action.videos || []), ...JSON.parse(window.localStorage.getItem("tiktok-live-action-videos-v3") || "[]")])];
+  const managedVideos = [...new Set([...actions.flatMap((action) => action.videos || []), ...JSON.parse(window.localStorage.getItem("tiktok-live-action-videos-v3") || "[]")].filter(Boolean))];
+  const selectedMapping = selectedGift
+    ? mappings.find((item) => (item.event_type || "gift") === "gift" && (item.condition || item.gift) === selectedGift.key)
+    : null;
   const isLive = Boolean(status?.running && status?.tiktok_connected);
 
   return (
@@ -106,13 +150,13 @@ export function GiftMatrix({ mappings, setMappings, actions, setActions, post, o
         <div className="catalog-title"><div><strong>Chọn quà TikTok</strong><small>{catalog.length ? "Danh sách của room đang live" : "Quà phổ thông"}</small></div><button onClick={refreshCatalog} disabled={catalogLoading}><RefreshCw size={13} className={catalogLoading ? "sync-spinner" : ""} /> Tải lại</button></div>
         <label className="catalog-search"><Search size={13} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Tìm Rose, Ice Cream…" /></label>
         <div className="gift-picker-grid">
-          {visibleGifts.map((gift) => <button key={gift.id} className={selectedGift?.key === gift.key ? "selected" : ""} onClick={() => addMapping(gift)}>
+          {visibleGifts.map((gift) => <button key={gift.id} className={selectedGift?.key === gift.key ? "selected" : ""} onClick={() => setSelectedGift(gift)}>
             {gift.image_url ? <img src={gift.image_url} alt="" /> : <span>{gift.emoji}</span>}<strong>{gift.name}</strong><small>💎 {gift.diamonds}</small>
           </button>)}
         </div>
         <label className="builder-field action-picker"><small>Video hành động</small><select value={selectedVideoPath} onChange={(event) => setSelectedVideoPath(event.target.value)}><option value="">Chọn video…</option>{managedVideos.map((path) => <option value={path} key={path}>{path.split(/[\\/]/).at(-1)}</option>)}</select></label>
-        {selectedGift ? <div className="gift-video-assignment"><span>GÁN VIDEO CHO</span><strong>{selectedGift.emoji || "🎁"} {selectedGift.name}</strong><small>{selectedVideoPath ? selectedVideoPath.split(/[\\/]/).at(-1) : "Chọn video trước"}</small><div><button onClick={() => setVideoPickerOpen((current) => !current)}><Video size={13} /> Gán video</button><button onClick={() => onManageVideos?.()} >Quản lý</button></div>{videoPickerOpen ? <div className="managed-video-picker">{managedVideos.length ? managedVideos.map((path) => <button key={path} onClick={() => assignVideo(path)}>{path.split(/[\\/]/).at(-1)}</button>) : <p>Chưa có video. Hãy thêm ở tab Video hành động.</p>}</div> : null}</div> : null}
-        <div className="builder-actions"><button onClick={() => onManageVideos?.()}><Plus size={14} /> Thêm video</button><button className="assign-button" onClick={() => addMapping()} disabled={!selectedGift || !selectedVideoPath}><Check size={14} /> Gán vào live</button></div>
+        {selectedGift ? <div className="gift-video-assignment"><span>{selectedMapping ? "CẬP NHẬT VIDEO CHO" : "GÁN VIDEO CHO"}</span><strong>{selectedGift.emoji || "🎁"} {selectedGift.name}</strong><small>{selectedVideoPath ? selectedVideoPath.split(/[\\/]/).at(-1) : selectedMapping?.available_video_count ? `Đang có ${selectedMapping.available_video_count} video` : "Chọn video trước"}</small><div><button onClick={() => setVideoPickerOpen((current) => !current)}><Video size={13} /> Gán video</button><button onClick={() => onManageVideos?.(selectedMapping?.action_id || selectedMapping?.action)} >Quản lý</button></div>{videoPickerOpen ? <div className="managed-video-picker">{managedVideos.length ? managedVideos.map((path) => <button key={path} onClick={() => assignVideo(path)}>{path.split(/[\\/]/).at(-1)}</button>) : <p>Chưa có video. Hãy thêm ở tab Video hành động.</p>}</div> : null}</div> : null}
+        <div className="builder-actions"><button onClick={() => onManageVideos?.(selectedMapping?.action_id || selectedMapping?.action)}><Plus size={14} /> Thêm video</button><button className="assign-button" onClick={() => assignToLive()} disabled={!selectedGift || !selectedVideoPath}><Check size={14} /> {selectedMapping ? "Cập nhật live" : "Gán vào live"}</button></div>
       </aside>
 
       <main className="mapping-list-panel">

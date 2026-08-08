@@ -73,6 +73,34 @@ OVERLAY_HTML = r"""<!doctype html>
       opacity: 1;
       transform: translateX(-50%) translateY(0) scale(1);
     }
+    #gift-guide {
+      position: absolute;
+      left: 4%;
+      top: 20%;
+      z-index: 9;
+      display: none;
+      width: clamp(190px, 23vw, 360px);
+      border: 1px solid rgba(186, 162, 255, .72);
+      border-radius: clamp(12px, 1.4vw, 20px);
+      background: transparent;
+      box-shadow: 0 0 20px rgba(107, 67, 209, .28);
+      color: #fff;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      overflow: hidden;
+      touch-action: none;
+      -webkit-app-region: no-drag;
+    }
+    #gift-guide.visible { display: block; }
+    #gift-guide.dragging { cursor: grabbing; box-shadow: 0 0 0 2px rgba(210, 190, 255, .85), 0 0 30px rgba(107, 67, 209, .52); }
+    .gift-guide-intro { display: none; }
+    .gift-guide-list { display: grid; gap: clamp(5px, .7vw, 9px); padding: clamp(12px, 1.4vw, 18px) clamp(11px, 1.2vw, 16px); }
+    .gift-guide-item { display: grid; grid-template-columns: clamp(24px, 2.5vw, 38px) minmax(0, 1fr); align-items: center; gap: 9px; min-width: 0; }
+    .gift-guide-item b, .gift-guide-item span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .gift-guide-item b { color: #f7f5ff; font-size: clamp(10px, 1.15vw, 16px); text-shadow: 0 2px 7px #000; }
+    .gift-guide-item span { margin-top: 2px; color: #d4c9ff; font-size: clamp(8px, .9vw, 13px); font-weight: 700; text-shadow: 0 2px 7px #000; }
+    .gift-guide-icon { display: grid; width: clamp(24px, 2.5vw, 38px); height: clamp(24px, 2.5vw, 38px); place-items: center; border-radius: 9px; background: rgba(141, 112, 239, .12); font-size: clamp(16px, 1.8vw, 26px); }
+    .gift-guide-footer { margin-top: 2px; padding: clamp(8px, 1vw, 13px) clamp(13px, 1.5vw, 20px); border-top: 1px solid rgba(166, 137, 255, .33); color: #e4dcff; font-size: clamp(8px, .9vw, 13px); font-weight: 800; letter-spacing: .04em; text-shadow: 0 2px 7px #000; }
+    .gift-guide-footer[hidden] { display: none; }
   </style>
 </head>
 <body>
@@ -82,8 +110,13 @@ OVERLAY_HTML = r"""<!doctype html>
     <video id="video-action-b" class="media" autoplay playsinline preload="auto"></video>
     <img id="image-a" class="media" alt="">
     <img id="image-b" class="media" alt="">
+    <audio id="background-music" loop preload="auto"></audio>
     <audio id="sound" preload="auto"></audio>
     <div id="status">Waiting for media</div>
+    <aside id="gift-guide" aria-label="Danh sách quà và hiệu ứng">
+      <div class="gift-guide-list" id="gift-guide-items"></div>
+      <div class="gift-guide-footer" id="gift-guide-footer"></div>
+    </aside>
   </main>
   <script>
     const query = new URLSearchParams(location.search);
@@ -92,19 +125,121 @@ OVERLAY_HTML = r"""<!doctype html>
     const mediaFit = query.get("fit") === "contain" ? "contain" : "cover";
     const requestedZoom = Number.parseFloat(query.get("zoom") || "1");
     const mediaZoom = Number.isFinite(requestedZoom) ? Math.min(1.3, Math.max(1, requestedZoom)) : 1;
+    const giftGuideEnabled = query.get("gift_guide") === "1";
+    const configApiUrl = query.get("config_api") || "http://127.0.0.1:8766/api/config";
     document.documentElement.style.setProperty("--media-fit", mediaFit);
     document.documentElement.style.setProperty("--media-zoom", String(mediaZoom));
     const idleVideo = document.querySelector("#video-idle");
     const actionVideos = [document.querySelector("#video-action-a"), document.querySelector("#video-action-b")];
     const videos = [idleVideo, ...actionVideos];
     const images = [document.querySelector("#image-a"), document.querySelector("#image-b")];
+    const backgroundMusic = document.querySelector("#background-music");
     const sound = document.querySelector("#sound");
     const status = document.querySelector("#status");
+    const giftGuide = document.querySelector("#gift-guide");
+    const giftGuideItems = document.querySelector("#gift-guide-items");
+    const giftGuideFooter = document.querySelector("#gift-guide-footer");
+    const position = { x: Number(query.get("gift_x") || 4), y: Number(query.get("gift_y") || 20) };
+    const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
+    giftGuide.style.left = `${clamp(position.x, 0, 95)}%`;
+    giftGuide.style.top = `${clamp(position.y, 0, 92)}%`;
+    let configuredGifts = [];
+    try { configuredGifts = JSON.parse(query.get("gift_items") || "[]"); } catch {}
+    if (!Array.isArray(configuredGifts)) configuredGifts = [];
+    configuredGifts.slice(0, 8).forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "gift-guide-item";
+      const icon = document.createElement("i");
+      icon.className = "gift-guide-icon";
+      icon.textContent = item.icon || "🎁";
+      const copy = document.createElement("div");
+      const name = document.createElement("b");
+      name.textContent = item.gift || "Quà tặng";
+      const action = document.createElement("span");
+      action.textContent = item.action || "Kích hoạt hiệu ứng";
+      copy.append(name, action);
+      row.append(icon, copy);
+      giftGuideItems.append(row);
+    });
+    giftGuideFooter.textContent = query.get("gift_footer") || "";
+    giftGuideFooter.hidden = !giftGuideFooter.textContent;
+    giftGuide.classList.toggle("visible", giftGuideEnabled);
+    let dragState = null;
+    function saveGiftGuidePosition() {
+      const nextPosition = { x: Number.parseFloat(giftGuide.style.left), y: Number.parseFloat(giftGuide.style.top) };
+      window.parent?.postMessage({ type: "gift-layout-position", position: nextPosition }, "*");
+      fetch(configApiUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ gift_panel_position: nextPosition }) }).catch(() => {});
+    }
+    giftGuide.addEventListener("pointerdown", (event) => {
+      if (!giftGuideEnabled || event.button !== 0) return;
+      const bounds = giftGuide.getBoundingClientRect();
+      dragState = { offsetX: event.clientX - bounds.left, offsetY: event.clientY - bounds.top };
+      giftGuide.classList.add("dragging");
+      giftGuide.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    giftGuide.addEventListener("pointermove", (event) => {
+      if (!dragState) return;
+      const bounds = giftGuide.getBoundingClientRect();
+      const x = clamp(((event.clientX - dragState.offsetX) / window.innerWidth) * 100, 0, 100 - (bounds.width / window.innerWidth) * 100);
+      const y = clamp(((event.clientY - dragState.offsetY) / window.innerHeight) * 100, 0, 100 - (bounds.height / window.innerHeight) * 100);
+      giftGuide.style.left = `${x.toFixed(2)}%`;
+      giftGuide.style.top = `${y.toFixed(2)}%`;
+    });
+    giftGuide.addEventListener("pointerup", (event) => {
+      if (!dragState) return;
+      dragState = null;
+      giftGuide.classList.remove("dragging");
+      giftGuide.releasePointerCapture(event.pointerId);
+      saveGiftGuidePosition();
+    });
     let currentVersion = -1;
+    let currentBackgroundMusicVersion = -1;
+    let currentMediaAudioVersion = -1;
     let activeMedia = null;
     let loadGeneration = 0;
     let socket = null;
     let reconnectTimer = null;
+
+    async function syncBackgroundMusic(state) {
+      const nextBackgroundMusicVersion = Number(state.background_music_version || 0);
+      const mediaUrl = state.background_music_url || "";
+      if (!mediaUrl) {
+        backgroundMusic.pause();
+        backgroundMusic.removeAttribute("src");
+        delete backgroundMusic.dataset.mediaUrl;
+        currentBackgroundMusicVersion = nextBackgroundMusicVersion;
+        return;
+      }
+      syncBackgroundMusicMute(state);
+      if (backgroundMusic.dataset.mediaUrl !== mediaUrl) {
+        backgroundMusic.pause();
+        backgroundMusic.dataset.mediaUrl = mediaUrl;
+        backgroundMusic.src = mediaUrl;
+        backgroundMusic.load();
+        if (backgroundMusic.readyState < 1) await waitForReady(backgroundMusic, "loadedmetadata");
+        const startedAt = Number(state.background_music_started_at_ms);
+        if (Number.isFinite(startedAt) && Number.isFinite(backgroundMusic.duration) && backgroundMusic.duration > 0) {
+          backgroundMusic.currentTime = Math.max(0, (Date.now() - startedAt) / 1000) % backgroundMusic.duration;
+        }
+      }
+      try {
+        await backgroundMusic.play();
+      } catch (error) {
+        if (debug) showStatus(`Background audio blocked: ${error.message}`, true);
+      }
+      currentBackgroundMusicVersion = nextBackgroundMusicVersion;
+    }
+
+    function syncBackgroundMusicMute(state) {
+      backgroundMusic.muted = muted || Boolean(state.background_music_muted) || state.mode === "action";
+    }
+
+    function syncMediaAudio(state) {
+      currentMediaAudioVersion = Number(state.media_audio_version || 0);
+      idleVideo.dataset.targetMuted = String(muted || Boolean(state.idle_video_muted));
+      if (activeMedia === idleVideo) idleVideo.muted = idleVideo.dataset.targetMuted === "true";
+    }
 
     function sendPlaybackEvent(type, state, detail = "") {
       if (socket?.readyState !== WebSocket.OPEN) return;
@@ -201,7 +336,7 @@ OVERLAY_HTML = r"""<!doctype html>
       } else {
         next.loop = state.mode === "idle";
         next.muted = true;
-        next.dataset.targetMuted = String(muted || Boolean(state.sound_url));
+        next.dataset.targetMuted = String(muted || Boolean(state.sound_url) || Boolean(state.media_muted));
         next.src = mediaUrl;
         next.load();
         if (next.readyState < 3) await waitForReady(next, "canplay");
@@ -312,8 +447,19 @@ OVERLAY_HTML = r"""<!doctype html>
           const message = JSON.parse(event.data);
           const state = message.state || message;
           if (message.type && message.type !== "playback_state") return;
-          if (state.version === currentVersion) return;
-          await applyState(state);
+          if (Number(state.background_music_version || 0) !== currentBackgroundMusicVersion) {
+            await syncBackgroundMusic(state);
+          }
+          if (state.mode === "action") syncBackgroundMusicMute(state);
+          if (Number(state.media_audio_version || 0) !== currentMediaAudioVersion) {
+            syncMediaAudio(state);
+          }
+          if (state.version !== currentVersion) await applyState(state);
+          // Only restore background audio after the idle layer is active and
+          // action video/sound teardown has completed.
+          if (state.mode !== "idle" || activeMedia?.dataset.mode === "idle") {
+            syncBackgroundMusicMute(state);
+          }
         } catch (error) {
           showStatus(`Invalid playback state: ${error.message}`, true);
         }
@@ -339,12 +485,18 @@ class OverlayState:
         self._action_path: Path | None = None
         self._next_action_path: Path | None = None
         self._sound_path: Path | None = None
+        self._background_music_path: Path | None = None
+        self._background_music_muted = False
+        self._background_music_version = 0
+        self._idle_video_muted = False
+        self._media_audio_version = 0
         self._mode = "idle"
         self._label = self._idle_path.name if self._idle_path else "No idle media"
         self._version = 1
         self._assets: dict[str, Path] = {}
         self._idle_started_at_ms = int(time.time() * 1000)
         self._started_at_ms = self._idle_started_at_ms
+        self._background_music_started_at_ms = self._idle_started_at_ms
 
     def _register_asset(self, path: Path, kind: str) -> str:
         stat = path.stat()
@@ -371,6 +523,27 @@ class OverlayState:
                 self._label = resolved.name if resolved else "No idle media"
                 self._version += 1
                 self._started_at_ms = self._idle_started_at_ms
+
+    def set_background_music(self, path: Path | None, muted: bool = False) -> None:
+        resolved = Path(path).resolve() if path else None
+        with self._lock:
+            path_changed = resolved != self._background_music_path
+            muted_changed = bool(muted) != self._background_music_muted
+            if not path_changed and not muted_changed:
+                return
+            self._background_music_path = resolved
+            self._background_music_muted = bool(muted)
+            if path_changed:
+                self._background_music_started_at_ms = int(time.time() * 1000)
+            self._background_music_version += 1
+
+    def set_idle_video_muted(self, muted: bool) -> None:
+        with self._lock:
+            next_muted = bool(muted)
+            if next_muted == self._idle_video_muted:
+                return
+            self._idle_video_muted = next_muted
+            self._media_audio_version += 1
 
     def show_action(
         self,
@@ -406,9 +579,11 @@ class OverlayState:
             sound_path = self._sound_path if self._mode == "action" else None
             media_exists = bool(media_path and media_path.is_file())
             sound_exists = bool(sound_path and sound_path.is_file())
+            background_music_exists = bool(self._background_music_path and self._background_music_path.is_file())
             next_exists = bool(self._next_action_path and self._next_action_path.is_file())
             media_url = self._register_asset(media_path, "media") if media_exists and media_path else ""
             sound_url = self._register_asset(sound_path, "audio") if sound_exists and sound_path else ""
+            background_music_url = self._register_asset(self._background_music_path, "audio") if background_music_exists and self._background_music_path else ""
             next_media_url = self._register_asset(self._next_action_path, "media") if next_exists and self._next_action_path else ""
             payload: dict[str, object] = {
                 "mode": self._mode if media_exists else "empty",
@@ -416,8 +591,15 @@ class OverlayState:
                 "version": self._version,
                 "started_at_ms": self._started_at_ms,
                 "media_type": "image" if media_path and media_path.suffix.lower() in IMAGE_EXTENSIONS else "video",
+                "media_muted": self._idle_video_muted if self._mode == "idle" else False,
+                "idle_video_muted": self._idle_video_muted,
+                "media_audio_version": self._media_audio_version,
                 "media_url": media_url,
                 "sound_url": sound_url,
+                "background_music_url": background_music_url,
+                "background_music_muted": self._background_music_muted,
+                "background_music_version": self._background_music_version,
+                "background_music_started_at_ms": self._background_music_started_at_ms,
                 "next_media_url": next_media_url,
             }
             return payload, media_path if media_exists else None, sound_path if sound_exists else None
@@ -642,6 +824,14 @@ class LocalOverlayServer:
 
     def set_idle_path(self, path: Path | None) -> None:
         self.state.set_idle_path(path)
+        self._broadcast_state()
+
+    def set_background_music(self, path: Path | None, muted: bool = False) -> None:
+        self.state.set_background_music(path, muted=muted)
+        self._broadcast_state()
+
+    def set_idle_video_muted(self, muted: bool) -> None:
+        self.state.set_idle_video_muted(muted)
         self._broadcast_state()
 
     def show_action(

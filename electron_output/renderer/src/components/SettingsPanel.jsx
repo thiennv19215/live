@@ -92,7 +92,17 @@ export function SettingsPanel({ config, setConfig, status, post, onNotice, compa
         <label><input type="checkbox" checked={Boolean(config.mock_mode)} onChange={(event) => update("mock_mode", event.target.checked)} /> Preview nội bộ</label>
         <label><input type="checkbox" checked={Boolean(config.enable_tiktok)} onChange={(event) => update("enable_tiktok", event.target.checked)} /> TikTok realtime</label>
         <label><input type="checkbox" checked={Boolean(config.enable_obs)} onChange={(event) => update("enable_obs", event.target.checked)} /> Đồng bộ OBS</label>
+        <label><input type="checkbox" checked={Boolean(config.gift_guide_enabled)} onChange={(event) => update("gift_guide_enabled", event.target.checked)} /> Nhắc tặng quà trên video</label>
       </div>
+
+      {!compact ? <div className="gift-guide-settings">
+        <span>BẢNG QUÀ & HIỆU ỨNG TRÊN OVERLAY</span>
+        <p>Bảng tự lấy quà và tên hành động bạn cấu hình trong “Quà & lệnh”. Kéo trực tiếp bảng trong Preview hoặc Output để đổi vị trí.</p>
+        <label className="field">
+          <span>Ghi chú dưới bảng (tuỳ chọn)</span>
+          <input maxLength={160} value={config.gift_guide_message ?? ""} placeholder="Ví dụ: Top Rank · Đổi pet" onChange={(event) => update("gift_guide_message", event.target.value)} />
+        </label>
+      </div> : null}
 
       {!compact ? <div className="form-stack">
         {FIELDS.map(([key, label, placeholder, type = "text"]) => (

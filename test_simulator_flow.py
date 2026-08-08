@@ -31,8 +31,14 @@ class TestTikTokLiveStreamSimulator(unittest.IsolatedAsyncioTestCase):
 
         self.original_app_dir = core.APP_DIRECTORY
         self.original_video_dir = core.VIDEO_DIRECTORY
+        self.original_mappings = core.GIFT_MAPPING.copy()
         core.APP_DIRECTORY = self.tmp_dir
         core.VIDEO_DIRECTORY = self.video_dir
+        core.GIFT_MAPPING.clear()
+        core.GIFT_MAPPING.update({
+            "rose": ("rose_dance.mp4", 1, "", "main"),
+            "lion": ("lion_transform.mp4", 5, "", "main"),
+        })
 
         self.overlay = LocalOverlayServer(host="127.0.0.1", port=0)
         self.app = core.TikTokObsApp(mock_mode=True, enable_tiktok=False, enable_obs=False, overlay=self.overlay)
@@ -40,6 +46,8 @@ class TestTikTokLiveStreamSimulator(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         core.APP_DIRECTORY = self.original_app_dir
         core.VIDEO_DIRECTORY = self.original_video_dir
+        core.GIFT_MAPPING.clear()
+        core.GIFT_MAPPING.update(self.original_mappings)
         if self.tmp_dir.exists():
             import shutil
             shutil.rmtree(self.tmp_dir, ignore_errors=True)
@@ -47,10 +55,6 @@ class TestTikTokLiveStreamSimulator(unittest.IsolatedAsyncioTestCase):
     async def test_full_gift_burst_simulation_flow(self) -> None:
         """Giả lập luồng nhận quà dồn dập, nạp trước (preload) và nối phát liên tục."""
         # Setup gift mapping
-        core.GIFT_MAPPING.clear()
-        core.GIFT_MAPPING["rose"] = ("rose_dance.mp4", 1, "", "main")
-        core.GIFT_MAPPING["lion"] = ("lion_transform.mp4", 5, "", "main")
-
         app_task = asyncio.create_task(self.app.run())
         await asyncio.sleep(0.05)
 

@@ -1,6 +1,8 @@
-import { ExternalLink, Eye, EyeOff, FolderOpen, Library, MonitorUp, Square, Trash2, Volume2, VolumeX } from "lucide-react";
+import { ExternalLink, Eye, EyeOff, FolderOpen, Gift, Library, MonitorUp, Music2, Square, Trash2, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useState } from "react";
 import { resolveHiddenChange, resolveOutputStatus } from "../../../output-state.mjs";
+
+const GIFT_ICONS = { rose: "🌹", doughnut: "🍩", tiktok: "🎵", lion: "🦁", perfume: "🧴", congratulations: "🎉", "ice cream": "🍦", "finger heart": "🫰", "paper crane": "📜", "sports car": "🏎️", spaceship: "🚀", dragon: "🐉", universe: "🌌" };
 
 const RATIOS = {
   "9:16": [1080, 1920],
@@ -10,12 +12,48 @@ const RATIOS = {
 };
 
 const FILL_MODES = {
-  original: { label: "Đủ video gốc", query: "fit=contain&zoom=1" },
-  cover: { label: "Phủ kín khung", query: "fit=cover&zoom=1" },
+  original: { label: "Đủ video gốc" },
+  cover: { label: "Phủ kín khung" },
 };
 
-const outputUrl = (baseUrl, fillMode) => baseUrl ? `${baseUrl}?${FILL_MODES[fillMode].query}` : "";
-const previewUrl = (baseUrl, fillMode, muted) => baseUrl ? `${baseUrl}?fit=${fillMode === "cover" ? "cover" : "contain"}&muted=${muted ? 1 : 0}` : "";
+const giftGuideParams = (config, mappings) => {
+  const position = config?.gift_panel_position || {};
+  const params = new URLSearchParams({
+    gift_guide: config?.gift_guide_enabled ? "1" : "0",
+    gift_footer: config?.gift_guide_message || "",
+    gift_x: String(position.x ?? 4),
+    gift_y: String(position.y ?? 20),
+    config_api: window.desktop?.backendUrl || "http://127.0.0.1:8766/api/config",
+  });
+  const gifts = (mappings || [])
+    .filter((item) => (item.event_type || "gift") === "gift" && item.enabled !== false)
+    .slice(0, 8)
+    .map((item) => {
+      const gift = item.condition || item.gift;
+      return {
+        gift: String(gift || "Quà tặng").replace(/\b\w/g, (letter) => letter.toUpperCase()),
+        action: item.action_name && item.action_name !== "Custom Video" ? item.action_name : "Kích hoạt hiệu ứng",
+        icon: GIFT_ICONS[String(gift || "").toLowerCase()] || "🎁",
+      };
+    });
+  if (gifts.length) params.set("gift_items", JSON.stringify(gifts));
+  return params;
+};
+
+const outputUrl = (baseUrl, fillMode, config, mappings) => {
+  if (!baseUrl) return "";
+  const params = giftGuideParams(config, mappings);
+  params.set("fit", fillMode === "cover" ? "cover" : "contain");
+  params.set("zoom", "1");
+  return `${baseUrl}?${params}`;
+};
+const previewUrl = (baseUrl, fillMode, muted, config, mappings) => {
+  if (!baseUrl) return "";
+  const params = giftGuideParams(config, mappings);
+  params.set("fit", fillMode === "cover" ? "cover" : "contain");
+  params.set("muted", muted ? "1" : "0");
+  return `${baseUrl}?${params}`;
+};
 const initialFillMode = () => {
   const saved = window.localStorage.getItem("output-fill-mode");
   // Old releases stored "crop" and applied an artificial 1.16x zoom.
@@ -52,6 +90,16 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
   useEffect(() => {
     if (!selectedGift && mappings?.length) setSelectedGift(mappings[0].gift);
   }, [mappings, selectedGift]);
+
+  useEffect(() => {
+    const syncPosition = (event) => {
+      if (event.origin !== new URL(status.overlay_url || "http://127.0.0.1:8765").origin) return;
+      if (event.data?.type !== "gift-layout-position" || !event.data.position) return;
+      setConfig((current) => ({ ...current, gift_panel_position: event.data.position }));
+    };
+    window.addEventListener("message", syncPosition);
+    return () => window.removeEventListener("message", syncPosition);
+  }, [setConfig, status.overlay_url]);
 
   const toggleHiddenMode = async (nextHidden) => {
     try {
@@ -106,6 +154,21 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
     onNotice(`Đã gán audio cho ${selectedGift}`);
   };
 
+  const pickBackgroundMusic = async () => {
+    const path = await window.desktop?.pickMedia?.({ title: "Chọn nhạc nền", kind: "audio", copyToLibrary: true });
+    if (!path) return;
+    const saved = await post("/api/media/background", { path });
+    setConfig(saved);
+    onNotice("Đã chọn nhạc nền");
+  };
+
+  const toggleBackgroundMute = async () => {
+    const next = { ...config, background_music_muted: !config?.background_music_muted };
+    const saved = await post("/api/config", next);
+    setConfig(saved);
+    onNotice(saved.background_music_muted ? "Đã tắt tiếng nhạc nền" : "Đã bật tiếng nhạc nền");
+  };
+
   const openOutput = async () => {
     if (outputOpen || outputBusy) return;
     if (!status.overlay_url) {
@@ -114,7 +177,7 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
     }
     setOutputBusy(true);
     try {
-      await window.desktop?.openOutput?.({ url: outputUrl(status.overlay_url, fillMode), ratio, width, height, hidden: outputHidden });
+      await window.desktop?.openOutput?.({ url: outputUrl(status.overlay_url, fillMode, config, mappings), ratio, width, height, hidden: outputHidden });
       setOutputOpen(true);
       setPreviewMuted(true);
       onNotice(outputHidden ? "Output đang chạy ngầm (TikTok Studio vẫn bắt bình thường)" : "Output đã sẵn sàng cho TikTok Studio");
@@ -137,7 +200,7 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
     await post("/api/config", next);
     if (outputOpen) {
       const [nextWidth, nextHeight] = RATIOS[output_ratio];
-      await window.desktop?.openOutput?.({ url: outputUrl(status.overlay_url, fillMode), ratio: output_ratio, width: nextWidth, height: nextHeight, hidden: outputHidden });
+      await window.desktop?.openOutput?.({ url: outputUrl(status.overlay_url, fillMode, config, mappings), ratio: output_ratio, width: nextWidth, height: nextHeight, hidden: outputHidden });
     }
   };
 
@@ -145,7 +208,17 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
     const nextMode = event.target.value;
     setFillMode(nextMode);
     window.localStorage.setItem("output-fill-mode", nextMode);
-    if (outputOpen) await window.desktop?.openOutput?.({ url: outputUrl(status.overlay_url, nextMode), ratio, width, height, hidden: outputHidden });
+    if (outputOpen) await window.desktop?.openOutput?.({ url: outputUrl(status.overlay_url, nextMode, config, mappings), ratio, width, height, hidden: outputHidden });
+  };
+
+  const toggleGiftGuide = async () => {
+    const next = { ...config, gift_guide_enabled: !config?.gift_guide_enabled };
+    const saved = await post("/api/config", next);
+    setConfig(saved);
+    if (outputOpen) {
+      await window.desktop?.openOutput?.({ url: outputUrl(status.overlay_url, fillMode, saved, mappings), ratio, width, height, hidden: outputHidden });
+    }
+    onNotice(saved.gift_guide_enabled ? "Đã hiện hướng dẫn tặng quà trên video" : "Đã ẩn hướng dẫn tặng quà");
   };
 
   const frameStyle = { aspectRatio: `${width} / ${height}`, "--preview-zoom": 1 };
@@ -183,6 +256,9 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
           <button className="toolbar-action" onClick={() => setPreviewMuted((current) => !current)} title={previewMuted ? "Bật âm preview" : "Tắt âm preview"}>
             {previewMuted ? <VolumeX size={14} /> : <Volume2 size={14} />} {previewMuted ? "Preview tắt âm" : "Âm preview"}
           </button>
+          <button className={`toolbar-action gift-guide-toggle ${config?.gift_guide_enabled ? "active" : ""}`} onClick={toggleGiftGuide} title="Bật hoặc tắt lời nhắc tặng quà trên video">
+            <Gift size={14} /> {config?.gift_guide_enabled ? "Đang nhắc tặng quà" : "Bật nhắc tặng quà"}
+          </button>
           <select value={fillMode} onChange={changeFillMode} aria-label="Cách lấp đầy output">
             {Object.entries(FILL_MODES).map(([value, item]) => <option value={value} key={value}>{item.label}</option>)}
           </select>
@@ -196,6 +272,25 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
         </div>
       </div>
 
+      <div className="background-music-bar">
+        <div className="background-music-copy">
+          <span className="background-music-icon"><Music2 size={16} /></span>
+          <div><small>NHẠC NỀN</small><strong>{config?.background_music_path?.split(/[\\/]/).at(-1) || "Chưa chọn nhạc"}</strong></div>
+        </div>
+        <div className="background-music-actions">
+          <button onClick={pickBackgroundMusic}><FolderOpen size={14} /> Chọn nhạc của tôi</button>
+          <button
+            className={config?.background_music_muted ? "muted" : ""}
+            onClick={toggleBackgroundMute}
+            disabled={!config?.background_music_path}
+            title={config?.background_music_muted ? "Bật tiếng nhạc nền" : "Tắt tiếng nhạc nền"}
+          >
+            {config?.background_music_muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+            {config?.background_music_muted ? "Bật tiếng" : "Tắt tiếng"}
+          </button>
+        </div>
+      </div>
+
       <div className="stage-body">
         <div className={`preview-frame ratio-${ratio.replace(":", "-")} ${outputOpen ? "output-active" : ""}`} style={frameStyle}>
           {outputOpen ? (
@@ -205,7 +300,7 @@ export function OutputStage({ status, config, setConfig, mappings, setMappings, 
                 : "Preview đã ẩn vì Output đang mở trên màn hình"}
             </div>
           ) : status.overlay_url ? (
-            <iframe src={previewUrl(status.overlay_url, fillMode, previewMuted)} title="Live output preview" />
+            <iframe src={previewUrl(status.overlay_url, fillMode, previewMuted, config, mappings)} title="Live output preview" />
           ) : (
             <div className="preview-offline">Đang chờ overlay…</div>
           )}

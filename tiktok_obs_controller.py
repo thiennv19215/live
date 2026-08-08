@@ -156,6 +156,7 @@ SCENE_NAME = str(_saved_obs_cfg.get("scene_name", SCENE_NAME))
 IDLE_SOURCE_NAME = str(_saved_obs_cfg.get("idle_source_name", IDLE_SOURCE_NAME))
 ACTION_SOURCE_NAME = str(_saved_obs_cfg.get("action_source_name", ACTION_SOURCE_NAME))
 OUTPUT_RATIO = str(_saved_obs_cfg.get("output_ratio", "9:16"))
+IDLE_VIDEO_MUTED = bool(_saved_obs_cfg.get("idle_video_muted", False))
 CHARACTER_COUNT = 1
 _saved_idle_paths = _saved_obs_cfg.get("idle_video_paths", {})
 _has_dynamic_idle_paths = "idle_video_paths" in _saved_obs_cfg and isinstance(_saved_idle_paths, dict)
@@ -258,12 +259,11 @@ DEFAULT_ACTION_PRESETS: dict[str, dict[str, Any]] = {
 def parse_video_filenames(val: str | list[str] | Any) -> list[str]:
     """Tach danh sach cac file video tu chuoi (phan cach boi dau phay) hoac list."""
     if isinstance(val, list):
-        items = [str(x).strip() for x in val if str(x).strip()]
-        return items if items else [""]
+        return [str(x).strip() for x in val if str(x).strip()]
     if isinstance(val, str):
-        items = [x.strip() for x in val.split(",") if x.strip()]
-        return items if items else [""]
-    return [str(val).strip()]
+        return [x.strip() for x in val.split(",") if x.strip()]
+    item = str(val).strip()
+    return [item] if item else []
 
 
 def select_random_video_filename(val: str | list[str] | Any) -> str:
@@ -764,6 +764,7 @@ class ObsController:
                     await self._request("trigger_media_input_action", name=ACTION_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
             if idle_id is not None:
                 await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=idle_id, enabled=True)
+                await self._request("set_input_mute", name=IDLE_SOURCE_NAME, muted=IDLE_VIDEO_MUTED)
                 with contextlib.suppress(Exception):
                     await self._request("trigger_media_input_action", name=IDLE_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY")
             LOGGER.info("[OBS] Da reset ve 1 video nen chung")
@@ -1123,6 +1124,7 @@ class ObsController:
             # Idle_Source được giữ chạy liên tục bên dưới Action_Source để chuyển cảnh mượt 0ms không vệt đen.
             if idle_item_id is not None:
                 await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=idle_item_id, enabled=True)
+                await self._request("set_input_mute", name=IDLE_SOURCE_NAME, muted=True)
                 with contextlib.suppress(Exception):
                     await self._request("trigger_media_input_action", name=IDLE_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY")
             await self._move_action_above_idle(ACTION_SOURCE_NAME, [IDLE_SOURCE_NAME])
@@ -1141,6 +1143,8 @@ class ObsController:
                 await self._request("set_scene_item_enabled", scene_name=SCENE_NAME, item_id=action_item_id, enabled=False)
             with contextlib.suppress(Exception):
                 await self._request("trigger_media_input_action", name=ACTION_SOURCE_NAME, action="OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP")
+            if idle_item_id is not None:
+                await self._request("set_input_mute", name=IDLE_SOURCE_NAME, muted=IDLE_VIDEO_MUTED)
 
     def _resolve_real_source_name(self, preferred_name: str, fallback_default: str) -> str:
         inputs = getattr(self, "existing_inputs", [])
@@ -1289,7 +1293,19 @@ class ObsController:
                 overlay=True,
             )
             await self._verify_input_file(target_idle_source, clean_path)
+            await self._request("set_input_mute", name=target_idle_source, muted=IDLE_VIDEO_MUTED)
             LOGGER.info("[OBS] Da xac nhan Video Cho tren %s", target_idle_source)
+
+    async def set_idle_video_muted(self, muted: bool) -> None:
+        target_idle_source = (
+            IDLE_SOURCE_NAME
+            if self.mock_mode
+            else self._resolve_real_source_name(IDLE_SOURCE_NAME, IDLE_SOURCE_NAME)
+        )
+        if self.mock_mode:
+            return
+        await self._request("set_input_mute", name=target_idle_source, muted=bool(muted))
+        LOGGER.info("[OBS] Am thanh video nen: %s", "tat" if muted else "bat")
 
     async def clear_idle_video(self, target_char: str = "char1") -> None:
         async with self._media_config_lock:

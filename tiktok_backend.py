@@ -48,6 +48,13 @@ class BackendRuntime:
         self._catalog_lock = threading.RLock()
         idle_path = core.resolve_existing_media_path(core.get_idle_video_path("main"))
         self.overlay = LocalOverlayServer(idle_path)
+        initial_config = core.load_obs_config()
+        self.overlay.set_idle_video_muted(bool(initial_config.get("idle_video_muted", False)))
+        background_music = core.resolve_existing_media_path(Path(str(initial_config.get("background_music_path", ""))))
+        self.overlay.set_background_music(
+            background_music if background_music.is_file() else None,
+            muted=bool(initial_config.get("background_music_muted", False)),
+        )
         self.overlay_error = ""
         try:
             self.overlay.start()
@@ -87,11 +94,20 @@ class BackendRuntime:
 
     def config(self) -> dict[str, Any]:
         config = core.load_obs_config()
+        config.setdefault("gift_guide_enabled", False)
+        config.setdefault("gift_guide_title", "Gifts")
+        config.setdefault("gift_guide_message", "")
+        config.setdefault("gift_panel_position", {"x": 4, "y": 20})
+        config.setdefault("background_music_muted", False)
+        config.setdefault("idle_video_muted", False)
+        configured_music = core.resolve_existing_media_path(Path(str(config.get("background_music_path", ""))))
+        config["background_music_path"] = str(configured_music) if configured_music.is_file() else ""
         idle_path = core.get_idle_video_path("main")
         config["idle_video_path"] = str(idle_path) if core.resolve_existing_media_path(idle_path).is_file() else ""
         return config
 
     def update_config(self, values: dict[str, Any]) -> dict[str, Any]:
+        stored_background_music = core.load_obs_config().get("background_music_path", "")
         config = self.config()
         allowed = {
             "tiktok_username",
@@ -105,12 +121,35 @@ class BackendRuntime:
             "mock_mode",
             "enable_tiktok",
             "enable_obs",
+            "gift_guide_enabled",
+            "gift_guide_title",
+            "gift_guide_message",
+            "gift_panel_position",
+            "background_music_muted",
+            "idle_video_muted",
         }
         for key in allowed:
             if key in values:
                 config[key] = values[key]
         config["obs_port"] = int(config.get("obs_port", 4455))
+        config["gift_guide_enabled"] = bool(config.get("gift_guide_enabled", False))
+        config["gift_guide_title"] = str(config.get("gift_guide_title", ""))[:80].strip() or "Gifts"
+        config["gift_guide_message"] = str(config.get("gift_guide_message", ""))[:160].strip()
+        config["background_music_muted"] = bool(config.get("background_music_muted", False))
+        config["idle_video_muted"] = bool(config.get("idle_video_muted", False))
+        position = config.get("gift_panel_position", {})
+        if not isinstance(position, dict):
+            position = {}
+        try:
+            x = float(position.get("x", 4))
+            y = float(position.get("y", 20))
+        except (TypeError, ValueError):
+            x, y = 4, 20
+        config["gift_panel_position"] = {"x": max(0, min(95, round(x, 2))), "y": max(0, min(92, round(y, 2)))}
         config.pop("idle_video_path", None)
+        config.pop("background_music_path", None)
+        if stored_background_music:
+            config["background_music_path"] = stored_background_music
         core.save_obs_config(config)
         core.TIKTOK_USERNAME = str(config["tiktok_username"]).strip().lstrip("@") or "mock_user"
         core.OBS_HOST = str(config["obs_host"]).strip()
@@ -120,6 +159,20 @@ class BackendRuntime:
         core.IDLE_SOURCE_NAME = str(config["idle_source_name"]).strip()
         core.ACTION_SOURCE_NAME = str(config["action_source_name"]).strip()
         core.OUTPUT_RATIO = str(config.get("output_ratio", "9:16"))
+        core.IDLE_VIDEO_MUTED = bool(config.get("idle_video_muted", False))
+        stored_config = core.load_obs_config()
+        music_path = core.resolve_existing_media_path(Path(str(stored_config.get("background_music_path", ""))))
+        if hasattr(self, "overlay"):
+            self.overlay.set_idle_video_muted(core.IDLE_VIDEO_MUTED)
+            self.overlay.set_background_music(
+                music_path if music_path.is_file() else None,
+                muted=bool(stored_config.get("background_music_muted", False)),
+            )
+        if self.app and self.app.enable_obs and self.app.obs.is_connected:
+            try:
+                self.submit(self.app.obs.set_idle_video_muted(core.IDLE_VIDEO_MUTED))
+            except Exception:
+                logging.getLogger(__name__).warning("Không thể cập nhật tắt tiếng video nền trên OBS", exc_info=True)
         if self.app and hasattr(self.app, "client"):
             self.app.client._unique_id = core.TIKTOK_USERNAME
         return self.config()
@@ -426,6 +479,43 @@ class BackendRuntime:
             raise RuntimeError("Hệ thống chưa chạy")
         return bool(self.submit(self.app.enqueue_trigger(trigger_key, sender=sender)))
 
+    def preview_media(self, path_value: str, action_id: str = "") -> dict[str, str]:
+        if not self.app:
+            raise RuntimeError("Hệ thống chưa chạy")
+        app = self.app
+        path = core.resolve_existing_media_path(Path(path_value).expanduser().resolve())
+        if not path.is_file():
+            raise FileNotFoundError(path)
+
+        preset = core.ACTION_PRESETS.get(str(action_id).strip())
+        sound_path: Path | None = None
+        label = path.name
+        if preset:
+            label = preset.name or label
+            if preset.sound_filename:
+                candidate = Path(preset.sound_filename)
+                if not candidate.is_absolute():
+                    candidate = core.VIDEO_DIRECTORY / candidate
+                resolved_sound = core.resolve_existing_sound_path(candidate)
+                if resolved_sound.is_file():
+                    sound_path = resolved_sound
+
+        async def enqueue() -> None:
+            await app.queue.put(core.GiftJob(
+                gift_name=label,
+                file_path=path,
+                priority=1,
+                sound_path=sound_path,
+                target_char="main",
+                sender="Phát thử video",
+                event_type="manual",
+                event_value=path.name,
+            ))
+            await app.update_queue_display()
+
+        self.submit(enqueue())
+        return {"path": str(path), "action_id": str(action_id).strip()}
+
     def clear_queue(self) -> int:
         return int(self.submit(self.app.clear_all_playback())) if self.app else 0
 
@@ -467,6 +557,19 @@ class BackendRuntime:
         if self.app and self.app.enable_obs and self.app.obs.is_connected:
             self.submit(self.app.obs.clear_idle_video("main"))
         return ""
+
+    def set_background_music(self, path_value: str) -> dict[str, Any]:
+        path = Path(path_value).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        if path.suffix.lower() not in {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"}:
+            raise ValueError("File nhạc nền không được hỗ trợ")
+        config = core.load_obs_config()
+        config["background_music_path"] = core.media_reference(path)
+        config.setdefault("background_music_muted", False)
+        core.save_obs_config(config)
+        self.overlay.set_background_music(path, muted=bool(config["background_music_muted"]))
+        return self.config()
 
     def status(self) -> dict[str, Any]:
         app = self.app
@@ -658,6 +761,10 @@ class BackendRequestHandler(BaseHTTPRequestHandler):
                 result = {"path": runtime.set_idle_video(str(body.get("path", "")))}
             elif self.path == "/api/media/idle/clear":
                 result = {"path": runtime.clear_idle_video()}
+            elif self.path == "/api/media/background":
+                result = runtime.set_background_music(str(body.get("path", "")))
+            elif self.path == "/api/media/preview":
+                result = runtime.preview_media(str(body.get("path", "")), str(body.get("action_id", "")))
             elif self.path == "/api/shutdown":
                 result = {"ok": True}
                 threading.Thread(target=self.server.shutdown, daemon=True).start()

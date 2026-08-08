@@ -18,9 +18,11 @@ class TestLocalOverlayServer(unittest.TestCase):
         self.idle_path = root / "idle.mp4"
         self.action_path = root / "action.mp4"
         self.sound_path = root / "sound.mp3"
+        self.background_music_path = root / "background.mp3"
         self.idle_path.write_bytes(b"idle-video-data")
         self.action_path.write_bytes(b"action-video-data")
         self.sound_path.write_bytes(b"sound-data")
+        self.background_music_path.write_bytes(b"background-music-data")
         self.server = LocalOverlayServer(self.idle_path, port=0)
         self.server.start()
 
@@ -33,6 +35,14 @@ class TestLocalOverlayServer(unittest.TestCase):
             html = response.read().decode("utf-8")
         self.assertIn("TikTok Live Overlay", html)
         self.assertIn("object-fit: var(--media-fit, cover)", html)
+        self.assertIn('id="gift-guide"', html)
+        self.assertIn('query.get("gift_guide") === "1"', html)
+        self.assertIn('gift-layout-position', html)
+        self.assertIn('gift-guide-item', html)
+        self.assertIn('id="background-music"', html)
+        self.assertIn("currentBackgroundMusicVersion", html)
+        self.assertIn("syncMediaAudio(state)", html)
+        self.assertIn('state.mode === "action"', html)
 
         with urlopen(f"http://{self.server.host}:{self.server.port}/api/state", timeout=2) as response:
             idle_state = json.load(response)
@@ -47,6 +57,22 @@ class TestLocalOverlayServer(unittest.TestCase):
         self.assertEqual(action_state["label"], "rose")
         self.assertRegex(action_state["sound_url"], r"^/audio/[0-9a-f]{20}\.mp3$")
         self.assertGreaterEqual(action_state["started_at_ms"], idle_state["started_at_ms"])
+
+        self.server.set_background_music(self.background_music_path, muted=True)
+        with urlopen(f"http://{self.server.host}:{self.server.port}/api/state", timeout=2) as response:
+            music_state = json.load(response)
+        self.assertRegex(music_state["background_music_url"], r"^/audio/[0-9a-f]{20}\.mp3$")
+        self.assertTrue(music_state["background_music_muted"])
+        self.assertEqual(music_state["background_music_version"], 1)
+        self.assertIsInstance(music_state["background_music_started_at_ms"], int)
+        self.assertEqual(music_state["version"], action_state["version"])
+
+        self.server.set_idle_video_muted(True)
+        with urlopen(f"http://{self.server.host}:{self.server.port}/api/state", timeout=2) as response:
+            muted_idle_state = json.load(response)
+        self.assertTrue(muted_idle_state["idle_video_muted"])
+        self.assertEqual(muted_idle_state["media_audio_version"], 1)
+        self.assertEqual(muted_idle_state["version"], action_state["version"])
 
         self.server.show_idle()
         with urlopen(f"http://{self.server.host}:{self.server.port}/api/state", timeout=2) as response:

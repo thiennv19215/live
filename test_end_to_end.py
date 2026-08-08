@@ -24,10 +24,31 @@ class FakeGiftEvent:
 class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._original_character_count = core.CHARACTER_COUNT
+        self._original_mappings = core.GIFT_MAPPING.copy()
+        self._original_presets = core.ACTION_PRESETS.copy()
+        fixture_media = str(Path(__file__).resolve())
+        core.ACTION_PRESETS.clear()
+        core.ACTION_PRESETS.update({
+            preset_id: core.ActionPreset(
+                id=preset.id,
+                name=preset.name,
+                videos=list(preset.videos) if any(preset.videos) else [fixture_media],
+                sound_filename=preset.sound_filename,
+            )
+            for preset_id, preset in self._original_presets.items()
+        })
+        core.GIFT_MAPPING.update({
+            "rose": (fixture_media, 1, "", "main"),
+            "lion": (fixture_media, 5, "", "main"),
+        })
         core.set_character_count(4)
         self.app = core.TikTokObsApp(mock_mode=True)
 
     async def asyncTearDown(self) -> None:
+        core.GIFT_MAPPING.clear()
+        core.GIFT_MAPPING.update(self._original_mappings)
+        core.ACTION_PRESETS.clear()
+        core.ACTION_PRESETS.update(self._original_presets)
         core.set_character_count(self._original_character_count)
 
     async def test_fifo_queue_ordering(self) -> None:
@@ -159,6 +180,8 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         multi_str = "dance1.mp4, dance2.mp4, dance3.mp4"
         files = core.parse_video_filenames(multi_str)
         self.assertEqual(files, ["dance1.mp4", "dance2.mp4", "dance3.mp4"])
+        self.assertEqual(core.parse_video_filenames(""), [])
+        self.assertEqual(core.parse_video_filenames([]), [])
 
         picked = core.select_random_video_filename(multi_str)
         self.assertIn(picked, files)
@@ -585,6 +608,7 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
         with (
             patch.object(obs, "_request", new=AsyncMock()) as request,
             patch.object(core.asyncio, "sleep", new=AsyncMock()),
+            patch.object(core, "IDLE_VIDEO_MUTED", False),
         ):
             await obs._set_action_visible(True, "char1")
             await obs._set_action_visible(False, "char1")
@@ -595,12 +619,18 @@ class TestTikTokObsEndToEnd(unittest.IsolatedAsyncioTestCase):
             if call.args and call.args[0] == "set_scene_item_enabled"
         ]
         requested_methods = [call.args[0] for call in request.await_args_list if call.args]
+        mute_calls = [
+            call.kwargs.get("muted")
+            for call in request.await_args_list
+            if call.args and call.args[0] == "set_input_mute" and call.kwargs.get("name") == core.IDLE_SOURCE_NAME
+        ]
 
         self.assertIn((11, True), visibility_calls)
         self.assertIn((12, True), visibility_calls)
         self.assertIn((12, False), visibility_calls)
         self.assertNotIn((11, False), visibility_calls)
         self.assertIn("set_scene_item_index", requested_methods)
+        self.assertEqual(mute_calls, [True, False])
         self.assertNotIn("set_scene_item_transform", requested_methods)
         self.assertNotIn("trigger_studio_mode_transition", requested_methods)
 
